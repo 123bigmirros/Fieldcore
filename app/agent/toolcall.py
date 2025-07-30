@@ -87,7 +87,6 @@ class ToolCallAgent(ReActAgent):
                 f"🧰 Tools being prepared: {[call.function.name for call in tool_calls]}"
             )
             logger.info(f"🔧 Tool arguments: {tool_calls[0].function.arguments}")
-
         try:
             if response is None:
                 raise RuntimeError("No response received from the LLM")
@@ -116,7 +115,9 @@ class ToolCallAgent(ReActAgent):
 
             # For 'auto' mode, continue with content if no commands but content exists
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
-                return bool(content)
+                logger.info(f"🎯 {self.name} 在AUTO模式下没有选择工具，停止循环")
+                return False
+                # return bool(content)
 
             return bool(self.tool_calls)
         except Exception as e:

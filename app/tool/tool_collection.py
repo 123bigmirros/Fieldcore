@@ -29,10 +29,15 @@ class ToolCollection:
         if not tool:
             return ToolFailure(error=f"Tool {name} is invalid")
         try:
-            result = await tool(**tool_input)
+            # 确保tool_input不为None
+            input_args = tool_input or {}
+            result = await tool(**input_args)
             return result
         except ToolError as e:
             return ToolFailure(error=e.message)
+        except Exception as e:
+            logger.error(f"Error executing tool '{name}': {e}")
+            return ToolFailure(error=f"Error executing tool: {str(e)}")
 
     async def execute_all(self) -> List[ToolResult]:
         """Execute all tools in the collection sequentially."""

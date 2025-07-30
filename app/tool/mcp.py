@@ -9,6 +9,7 @@ from app.logger import logger
 from app.tool.base import BaseTool, ToolResult
 from app.tool.tool_collection import ToolCollection
 from mcp import ClientSession, StdioServerParameters
+from pydantic import Field
 
 
 class MCPClientTool(BaseTool):
@@ -24,14 +25,17 @@ class MCPClientTool(BaseTool):
             return ToolResult(error="Not connected to MCP server")
 
         try:
-            logger.info(f"Executing tool: {self.original_name}")
+            logger.info(f"Executing tool: {self.original_name} with args: {kwargs}")
             result = await self.session.call_tool(self.original_name, kwargs)
             content_str = ", ".join(
                 item.text for item in result.content if isinstance(item, TextContent)
             )
+            logger.info(f"Tool {self.original_name} result: {content_str[:200]}...")
             return ToolResult(output=content_str or "No output returned.")
         except Exception as e:
-            return ToolResult(error=f"Error executing tool: {str(e)}")
+            error_msg = f"Error executing tool {self.original_name}: {type(e).__name__}: {str(e) or 'No error details'}"
+            logger.error(error_msg, exc_info=True)
+            return ToolResult(error=error_msg)
 
 
 class MCPClients(ToolCollection):
@@ -62,6 +66,29 @@ class MCPClients(ToolCollection):
         self.exit_stacks[server_id] = exit_stack
 
         streams_context = sse_client(url=server_url)
+        streams = await exit_stack.enter_async_context(streams_context)
+        session = await exit_stack.enter_async_context(ClientSession(*streams))
+        self.sessions[server_id] = session
+
+        await self._initialize_and_list_tools(server_id)
+
+    async def connect_http(self, server_url: str, server_id: str = "") -> None:
+        """Connect to an MCP server using HTTP transport."""
+        if not server_url:
+            raise ValueError("Server URL is required.")
+
+        server_id = server_id or server_url
+
+        # Always ensure clean disconnection before new connection
+        if server_id in self.sessions:
+            await self.disconnect(server_id)
+
+        exit_stack = AsyncExitStack()
+        self.exit_stacks[server_id] = exit_stack
+
+        # Use HTTP client for MCP server
+        from mcp.client.http import http_client
+        streams_context = http_client(url=server_url)
         streams = await exit_stack.enter_async_context(streams_context)
         session = await exit_stack.enter_async_context(ClientSession(*streams))
         self.sessions[server_id] = session

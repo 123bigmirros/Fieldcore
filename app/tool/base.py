@@ -8,6 +8,7 @@ class BaseTool(ABC, BaseModel):
     name: str
     description: str
     parameters: Optional[dict] = None
+    agent_type: Optional[str] = Field(default=None, description="Agent类型：human, machine, 或 None(通用)")
 
     class Config:
         arbitrary_types_allowed = True

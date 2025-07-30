@@ -1,0 +1,18 @@
+{
+    "name": "openmanus-frontend",
+    "version": "1.0.0",
+    "description": "OpenManus Machine Movement Visualization",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "vue": "^3.3.4",
+        "axios": "^1.5.0"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "^4.3.4",
+        "vite": "^4.4.9"
+    }
+}

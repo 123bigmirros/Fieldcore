@@ -30,6 +30,9 @@ class MCPAgent(ToolCallAgent):
     max_steps: int = 20
     connection_type: str = "stdio"  # "stdio" or "sse"
 
+    # Agent类型，用于过滤工具
+    agent_type: Optional[str] = Field(default=None, description="Agent类型：human, machine, 或 None(通用)")
+
     # Track tool schemas to detect changes
     tool_schemas: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     _refresh_tools_interval: int = 5  # Refresh tools every N steps
@@ -60,6 +63,17 @@ class MCPAgent(ToolCallAgent):
             if not server_url:
                 raise ValueError("Server URL is required for SSE connection")
             await self.mcp_clients.connect_sse(server_url=server_url)
+        elif self.connection_type == "http":
+            if not server_url:
+                raise ValueError("Server URL is required for HTTP connection")
+            await self.mcp_clients.connect_http(server_url=server_url)
+        elif self.connection_type == "http_api":
+            if not server_url:
+                raise ValueError("Server URL is required for HTTP API connection")
+            # 使用HTTP MCP客户端
+            from app.tool.http_mcp import HTTPMCPClients
+            self.mcp_clients = HTTPMCPClients(server_url=server_url)
+            await self.mcp_clients.initialize()
         elif self.connection_type == "stdio":
             if not command:
                 raise ValueError("Command is required for stdio connection")
@@ -168,6 +182,39 @@ class MCPAgent(ToolCallAgent):
         """Determine if tool execution should finish the agent"""
         # Terminate if the tool name is 'terminate'
         return name.lower() == "terminate"
+
+    async def call_tool(self, tool_name: str, **kwargs) -> Any:
+        """Directly call an MCP tool with the provided arguments.
+
+        Args:
+            tool_name: Name of the tool to call
+            **kwargs: Arguments to pass to the tool
+
+        Returns:
+            Tool execution result
+        """
+        if not self.available_tools or tool_name not in self.available_tools.tool_map:
+            raise ValueError(f"Tool '{tool_name}' not available")
+
+        # 检查工具权限
+        if self.agent_type:
+            # 获取工具实例以检查其agent_type
+            tool_instance = self.available_tools.tool_map.get(tool_name)
+            if tool_instance and hasattr(tool_instance, 'agent_type') and tool_instance.agent_type:
+                # 如果工具有特定的agent_type限制
+                if tool_instance.agent_type != self.agent_type:
+                    raise ValueError(f"Tool '{tool_name}' is only available for {tool_instance.agent_type} agents, not {self.agent_type} agents")
+                # 如果是通用工具（agent_type为None），则允许访问
+                elif tool_instance.agent_type is None:
+                    pass
+            # 如果工具没有agent_type标记，则允许访问
+
+        try:
+            result = await self.available_tools.execute(name=tool_name, tool_input=kwargs)
+            return result
+        except Exception as e:
+            logger.error(f"Error calling tool '{tool_name}': {e}")
+            raise
 
     async def cleanup(self) -> None:
         """Clean up MCP connection when done."""
