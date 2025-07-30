@@ -148,9 +148,8 @@ class MachineAgent(MCPAgent):
         from app.schema import Message
         self.memory.add_message(Message.system_message(formatted_prompt))
 
-    async def cleanup(self) -> None:
-        """清理机器人资源"""
-        # 从世界中移除机器人
+    async def remove_from_world(self) -> None:
+        """从世界中移除机器人"""
         try:
             result = await self.call_tool(
                 "mcp_python_remove_machine",
@@ -160,9 +159,10 @@ class MachineAgent(MCPAgent):
         except Exception as e:
             logger.warning(f"❌ 移除机器人 {self.machine_id} 失败: {e}")
 
-        # 调用父类清理
-        await super().cleanup()
-        logger.info(f"🧹 Smart Machine {self.machine_id} 已清理")
+    async def cleanup(self, *args, **kwargs):
+        """清理机器人资源 - 空实现，避免自动删除机器人"""
+        # 不做任何实际清理，避免自动删除机器人
+        pass
 
     def _should_finish_execution(self, name: str, **kwargs) -> bool:
         """确定工具执行是否应该结束agent"""

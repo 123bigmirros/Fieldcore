@@ -270,30 +270,25 @@ class HumanAgent(MCPAgent):
             except Exception as e:
                 logger.warning(f"更新机器人 {machine_id} 信息失败: {e}")
 
-    async def cleanup(self) -> None:
-        """清理资源"""
-        try:
-            # 停止所有机器人的命令监听器
-            for machine in self.machines.values():
-                try:
-                    await machine.stop_command_listener()
-                except Exception as e:
-                    logger.warning(f"停止机器人 {machine.machine_id} 监听器失败: {e}")
+    async def recycle_all_machines(self) -> None:
+        """
+        停止所有机器人的命令监听器，并从世界中移除所有机器人
+        """
+        for machine in self.machines.values():
+            try:
+                await machine.stop_command_listener()
+            except Exception as e:
+                logger.warning(f"停止机器人 {machine.machine_id} 监听器失败: {e}")
+            try:
+                await machine.remove_from_world()
+            except Exception as e:
+                logger.warning(f"移除机器人 {machine.machine_id} 失败: {e}")
+        logger.info(f"♻️ Human Commander {self.human_id} 已手动回收所有机器人")
 
-            # 清理所有机器人
-            for machine in self.machines.values():
-                try:
-                    await machine.cleanup()
-                except Exception as e:
-                    logger.warning(f"清理机器人 {machine.machine_id} 失败: {e}")
-
-            # 清理Human Agent
-            await super().cleanup()
-
-            logger.info(f"🧹 Human Commander {self.human_id} 已清理")
-
-        except Exception as e:
-            logger.error(f"Human Agent清理失败: {e}")
+    async def cleanup(self, *args, **kwargs):
+        """清理资源 - 空实现，避免自动删除机器人"""
+        # 不做任何实际清理，避免自动删除机器人
+        pass
 
 
 # 便捷创建函数

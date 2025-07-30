@@ -76,9 +76,11 @@ async def test_simple_human_machine_lineup():
         traceback.print_exc()
 
     finally:
-        # 清理资源
-        await human.cleanup()
-        logger.info("🧹 测试完成，资源已清理")
+        # 保持机器人运行状态，不清理
+        logger.info("✅ 测试完成，机器人保持运行状态")
+        logger.info("🌐 前端地址: http://localhost:3000")
+        logger.info("💡 机器人将继续在前端显示")
+        # 不调用任何cleanup，让机器人保持运行
 
 
 if __name__ == "__main__":

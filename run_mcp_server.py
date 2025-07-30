@@ -8,7 +8,7 @@ from flask_cors import CORS
 from app.mcp.server import MCPServer, parse_args
 
 
-def create_http_server(world_manager, mcp_server):
+def create_http_server(mcp_server):
     """创建HTTP服务器"""
     app = Flask(__name__)
     CORS(app)
@@ -32,10 +32,10 @@ def create_http_server(world_manager, mcp_server):
             result = asyncio.run(mcp_server.server.call_tool(tool_name, parameters))
 
             # 处理返回值序列化
-            if hasattr(result, 'content'):
-                # 如果是TextContent对象，提取文本内容
+            if isinstance(result, list):
+                # 如果是TextContent对象列表，提取文本内容
                 content_str = ""
-                for content in result.content:
+                for content in result:
                     if hasattr(content, 'text'):
                         content_str += content.text
                 return jsonify({'result': content_str})
@@ -50,72 +50,19 @@ def create_http_server(world_manager, mcp_server):
     def list_tools():
         """获取可用工具列表"""
         try:
-            # 返回基本的工具列表
-            tools = [
-                {
-                    'name': 'register_machine',
-                    'description': 'Register a new machine in the world',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'machine_id': {'type': 'string'},
-                            'position': {'type': 'array', 'items': {'type': 'number'}},
-                            'life_value': {'type': 'integer'},
-                            'machine_type': {'type': 'string'}
-                        }
-                    }
-                },
-                {
-                    'name': 'movement',
-                    'description': 'Move a machine to a new position',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'machine_id': {'type': 'string'},
-                            'coordinates': {'type': 'array', 'items': {'type': 'number'}},
-                            'relative': {'type': 'boolean'}
-                        }
-                    }
-                },
-                {
-                    'name': 'get_all_machines',
-                    'description': 'Get all machines in the world',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {}
-                    }
-                },
-                {
-                    'name': 'get_machine_info',
-                    'description': 'Get information about a specific machine',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'machine_id': {'type': 'string'}
-                        }
-                    }
-                },
-                {
-                    'name': 'get_machine_commands',
-                    'description': 'Get commands for a specific machine',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'machine_id': {'type': 'string'}
-                        }
-                    }
-                },
-                {
-                    'name': 'remove_machine',
-                    'description': 'Remove a machine from the world',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'machine_id': {'type': 'string'}
-                        }
-                    }
+            # 通过MCP服务器获取工具列表
+            tools_list = asyncio.run(mcp_server.server.list_tools())
+
+            # 转换工具格式为HTTP API格式
+            tools = []
+            for tool in tools_list:
+                tool_dict = {
+                    'name': tool.name,
+                    'description': tool.description,
+                    'parameters': tool.inputSchema
                 }
-            ]
+                tools.append(tool_dict)
+
             return jsonify({'tools': tools})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -124,18 +71,18 @@ def create_http_server(world_manager, mcp_server):
     def get_machines():
         """获取所有机器信息"""
         try:
-            machines = world_manager.get_all_machines()
-            result = {}
-            for machine_id, machine_info in machines.items():
-                result[machine_id] = {
-                    'machine_id': machine_info.machine_id,
-                    'position': list(machine_info.position.coordinates),
-                    'life_value': machine_info.life_value,
-                    'machine_type': machine_info.machine_type,
-                    'status': machine_info.status,
-                    'last_action': machine_info.last_action
-                }
-            return jsonify(result)
+            # 通过MCP服务器获取所有机器信息
+            result = asyncio.run(mcp_server.server.call_tool('get_all_machines', {}))
+
+            # 处理返回值
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+                return jsonify(content_str)
+            else:
+                return jsonify({'error': 'Failed to get machines'}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
@@ -143,17 +90,16 @@ def create_http_server(world_manager, mcp_server):
     def get_machine(machine_id):
         """获取特定机器信息"""
         try:
-            machine_info = world_manager.get_machine_info(machine_id)
-            if machine_info:
-                result = {
-                    'machine_id': machine_info.machine_id,
-                    'position': list(machine_info.position.coordinates),
-                    'life_value': machine_info.life_value,
-                    'machine_type': machine_info.machine_type,
-                    'status': machine_info.status,
-                    'last_action': machine_info.last_action
-                }
-                return jsonify(result)
+            # 通过MCP服务器获取特定机器信息
+            result = asyncio.run(mcp_server.server.call_tool('get_machine_info', {'machine_id': machine_id}))
+
+            # 处理返回值
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+                return jsonify(content_str)
             else:
                 return jsonify({'error': 'Machine not found'}), 404
         except Exception as e:
@@ -163,11 +109,26 @@ def create_http_server(world_manager, mcp_server):
     def health_check():
         """健康检查"""
         try:
-            machines = world_manager.get_all_machines()
-            return jsonify({
-                'status': 'ok',
-                'machine_count': len(machines)
-            })
+            # 通过MCP服务器获取机器数量
+            result = asyncio.run(mcp_server.server.call_tool('get_all_machines', {}))
+
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+
+                # 解析JSON获取机器数量
+                import json
+                machines_data = json.loads(content_str)
+                machine_count = len(machines_data)
+
+                return jsonify({
+                    'status': 'ok',
+                    'machine_count': machine_count
+                })
+            else:
+                return jsonify({'error': 'Failed to get health status'}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
@@ -175,10 +136,26 @@ def create_http_server(world_manager, mcp_server):
     def reset_world():
         """重置世界状态"""
         try:
-            machines = world_manager.get_all_machines()
-            for machine_id in list(machines.keys()):
-                world_manager.remove_machine(machine_id)
-            return jsonify({'status': 'ok', 'message': 'World reset successfully'})
+            # 通过MCP服务器获取所有机器，然后逐个移除
+            result = asyncio.run(mcp_server.server.call_tool('get_all_machines', {}))
+
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+
+                # 解析JSON获取机器列表
+                import json
+                machines_data = json.loads(content_str)
+
+                # 逐个移除机器
+                for machine_id in machines_data.keys():
+                    asyncio.run(mcp_server.server.call_tool('remove_machine', {'machine_id': machine_id}))
+
+                return jsonify({'status': 'ok', 'message': 'World reset successfully'})
+            else:
+                return jsonify({'error': 'Failed to reset world'}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
@@ -201,11 +178,8 @@ if __name__ == "__main__":
     # 创建MCP服务器
     server = MCPServer()
 
-    # 获取WorldManager实例
-    world_manager = server.world_manager
-
     # 创建HTTP服务器
-    http_app = create_http_server(world_manager, server)
+    http_app = create_http_server(server)
 
     # 在后台启动HTTP服务器
     print("🚀 启动MCP服务器...")
