@@ -20,7 +20,7 @@ from mcp.server.fastmcp import FastMCP
 from app.logger import logger
 from app.tool.base import BaseTool
 from app.tool.human_tools import ControlMachineTool, GetMachineStatusTool, PlanTaskTool
-from app.tool.machine_tools import CheckEnvironmentTool, MovementTool, MachineActionTool
+from app.tool.machine_tools import CheckEnvironmentTool, MovementTool, StepMovementTool, LaserAttackTool
 from app.agent.world_manager import WorldManager, Position
 
 
@@ -30,6 +30,7 @@ class CommandStatus(Enum):
     EXECUTING = "executing"  # 正在执行
     COMPLETED = "completed"  # 执行完成
     FAILED = "failed"  # 执行失败
+    CANCELLED = "cancelled"  # 被挤占取消
 
 
 @dataclass
@@ -73,7 +74,8 @@ class MCPServer:
         self.machine_tools = {
             "check_environment": CheckEnvironmentTool(),
             "movement": MovementTool(),
-            "machine_action": MachineActionTool()
+            "step_movement": StepMovementTool(),
+            "laser_attack": LaserAttackTool()
         }
 
         # 将工具添加到主工具字典中，但标记其类型
@@ -209,17 +211,20 @@ class MCPServer:
 
         # Register machine tool
         @self.server.tool()
-        async def register_machine(machine_id: str, position: list, life_value: int = 10, machine_type: str = "generic") -> str:
+        async def register_machine(machine_id: str, position: list, life_value: int = 10, machine_type: str = "generic", size: float = 1.0, facing_direction: list = None) -> str:
             """Register a new machine in the world."""
             try:
                 pos = Position(*position)
+                facing = tuple(facing_direction) if facing_direction else (1.0, 0.0)
                 self.world_manager.register_machine(
                     machine_id=machine_id,
                     position=pos,
                     life_value=life_value,
-                    machine_type=machine_type
+                    machine_type=machine_type,
+                    size=size,
+                    facing_direction=facing
                 )
-                return f"Machine {machine_id} registered successfully at position {pos}"
+                return f"Machine {machine_id} registered successfully at position {pos} with size {size}"
             except Exception as e:
                 return f"Error registering machine {machine_id}: {str(e)}"
 
@@ -236,7 +241,9 @@ class MCPServer:
                         "life_value": info.life_value,
                         "machine_type": info.machine_type,
                         "status": info.status,
-                        "last_action": info.last_action
+                        "last_action": info.last_action,
+                        "size": info.size,
+                        "facing_direction": list(info.facing_direction)
                     })
                 else:
                     return f"Error: Machine {machine_id} not found"
@@ -257,7 +264,9 @@ class MCPServer:
                         "life_value": info.life_value,
                         "machine_type": info.machine_type,
                         "status": info.status,
-                        "last_action": info.last_action
+                        "last_action": info.last_action,
+                        "size": info.size,
+                        "facing_direction": list(info.facing_direction)
                     }
                 return json.dumps(result)
             except Exception as e:
@@ -266,14 +275,18 @@ class MCPServer:
         # Update machine position tool
         @self.server.tool()
         async def update_machine_position(machine_id: str, new_position: list) -> str:
-            """Update a machine's position."""
+            """Update a machine's position with collision detection."""
             try:
                 pos = Position(*new_position)
-                success = self.world_manager.update_machine_position(machine_id, pos)
+                success, collision_details = self.world_manager.update_machine_position_with_details(machine_id, pos)
                 if success:
                     return f"Machine {machine_id} position updated to {pos}"
                 else:
-                    return f"Error: Failed to update position for machine {machine_id}"
+                    if collision_details:
+                        details = "; ".join(collision_details)
+                        return f"Error: Movement blocked for machine {machine_id}. 碰撞检测: {details}"
+                    else:
+                        return f"Error: Failed to update position for machine {machine_id}"
             except Exception as e:
                 return f"Error updating machine position: {str(e)}"
 
@@ -331,7 +344,9 @@ class MCPServer:
                         "life_value": info.life_value,
                         "machine_type": info.machine_type,
                         "status": info.status,
-                        "last_action": info.last_action
+                        "last_action": info.last_action,
+                        "size": info.size,
+                        "facing_direction": list(info.facing_direction)
                     })
                 return json.dumps(result)
             except Exception as e:
@@ -462,8 +477,100 @@ class MCPServer:
             except Exception as e:
                 return f"Error getting command status: {str(e)}"
 
+        # Obstacle management tools
+        @self.server.tool()
+        async def add_obstacle(obstacle_id: str, position: list, size: float = 1.0, obstacle_type: str = "static") -> str:
+            """Add a new obstacle to the world."""
+            try:
+                from app.agent.world_manager import Position
+                pos = Position(*position)
+                success = self.world_manager.add_obstacle(
+                    obstacle_id=obstacle_id,
+                    position=pos,
+                    size=size,
+                    obstacle_type=obstacle_type
+                )
+                if success:
+                    return f"Obstacle {obstacle_id} added successfully at position {pos} with size {size}"
+                else:
+                    return f"Error: Failed to add obstacle {obstacle_id} (collision or already exists)"
+            except Exception as e:
+                return f"Error adding obstacle: {str(e)}"
+
+        @self.server.tool()
+        async def remove_obstacle(obstacle_id: str) -> str:
+            """Remove an obstacle from the world."""
+            try:
+                success = self.world_manager.remove_obstacle(obstacle_id)
+                if success:
+                    return f"Obstacle {obstacle_id} removed successfully"
+                else:
+                    return f"Error: Obstacle {obstacle_id} not found"
+            except Exception as e:
+                return f"Error removing obstacle: {str(e)}"
+
+        @self.server.tool()
+        async def get_obstacle_info(obstacle_id: str) -> str:
+            """Get information about a specific obstacle."""
+            try:
+                obstacle = self.world_manager.get_obstacle(obstacle_id)
+                if obstacle:
+                    return json.dumps({
+                        "obstacle_id": obstacle.obstacle_id,
+                        "position": list(obstacle.position.coordinates),
+                        "size": obstacle.size,
+                        "obstacle_type": obstacle.obstacle_type
+                    })
+                else:
+                    return f"Error: Obstacle {obstacle_id} not found"
+            except Exception as e:
+                return f"Error getting obstacle info: {str(e)}"
+
+        @self.server.tool()
+        async def get_all_obstacles() -> str:
+            """Get information about all obstacles in the world."""
+            try:
+                obstacles = self.world_manager.get_all_obstacles()
+                result = {}
+                for obstacle_id, obstacle in obstacles.items():
+                    result[obstacle_id] = {
+                        "obstacle_id": obstacle.obstacle_id,
+                        "position": list(obstacle.position.coordinates),
+                        "size": obstacle.size,
+                        "obstacle_type": obstacle.obstacle_type
+                    }
+                return json.dumps(result)
+            except Exception as e:
+                return f"Error getting all obstacles: {str(e)}"
+
+        @self.server.tool()
+        async def clear_all_obstacles() -> str:
+            """Remove all obstacles from the world."""
+            try:
+                self.world_manager.clear_all_obstacles()
+                return "All obstacles removed successfully"
+            except Exception as e:
+                return f"Error clearing obstacles: {str(e)}"
+
+        @self.server.tool()
+        async def check_collision(position: list, size: float = 1.0, exclude_machine_id: str = None) -> str:
+            """Check if a position would collide with obstacles or machines."""
+            try:
+                from app.agent.world_manager import Position
+                pos = Position(*position)
+                collision = self.world_manager.check_collision(pos, size, exclude_machine_id)
+                collision_details = self.world_manager.find_collision_details(pos, size, exclude_machine_id)
+
+                return json.dumps({
+                    "collision": collision,
+                    "details": collision_details
+                })
+            except Exception as e:
+                return f"Error checking collision: {str(e)}"
+
         logger.info("MCPServer: All world state management tools registered")
         logger.info("MCPServer: Command queue tools registered")
+        logger.info("MCPServer: Obstacle management tools registered")
 
     def run(self, transport: str = "stdio", host: str = None, port: int = None) -> None:
         """Run the MCP server."""

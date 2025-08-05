@@ -103,6 +103,7 @@ class HumanAgent(MCPAgent):
                     location=Position(0.0, 0.0, 0.0),
                     life_value=10,
                     machine_type="worker",
+                    size=1.0,  # 默认机器人大小
                     agent_type="machine"  # 为Machine Agent设置正确的agent_type
                 )
 

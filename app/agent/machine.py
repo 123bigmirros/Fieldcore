@@ -4,6 +4,7 @@ Machine Agent - 智能机器人，执行来自Human Agent的本地任务
 
 import asyncio
 import json
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -52,9 +53,12 @@ class MachineAgent(MCPAgent):
     location: Position = Field(default_factory=lambda: Position(0.0, 0.0, 0.0))
     life_value: int = Field(default=10)
     machine_type: str = Field(default="worker")
+    size: float = Field(default=1.0)  # 机器人大小（碰撞检测半径）
 
     # 执行状态跟踪
     current_command: Optional[Dict[str, Any]] = None
+    current_command_task: Optional[asyncio.Task] = None  # 当前执行的命令任务
+    current_command_id: Optional[str] = None  # 当前执行的命令ID
     command_history: List[Dict[str, Any]] = Field(default_factory=list)
     is_listening: bool = False
     last_action: Optional[str] = None
@@ -64,6 +68,7 @@ class MachineAgent(MCPAgent):
                  location: Optional[Position] = None,
                  life_value: int = 10,
                  machine_type: str = "worker",
+                 size: float = 1.0,
                  **kwargs):
         """
         直接初始化 - 不需要判断变量
@@ -73,6 +78,7 @@ class MachineAgent(MCPAgent):
             location: 初始位置，可选
             life_value: 生命值
             machine_type: 机器人类型
+            size: 机器人大小（碰撞检测半径）
         """
         super().__init__(**kwargs)
 
@@ -83,8 +89,9 @@ class MachineAgent(MCPAgent):
             self.location = location
         self.life_value = life_value
         self.machine_type = machine_type
+        self.size = size
 
-        logger.info(f"🤖 Smart Machine {self.machine_id} 已创建 at {self.location}")
+        logger.info(f"🤖 Smart Machine {self.machine_id} 已创建 at {self.location} (size: {self.size})")
 
     async def initialize(self, **kwargs) -> None:
         """
@@ -129,7 +136,8 @@ class MachineAgent(MCPAgent):
                 machine_id=self.machine_id,
                 position=list(self.location.coordinates),
                 life_value=self.life_value,
-                machine_type=self.machine_type
+                machine_type=self.machine_type,
+                size=self.size
             )
             logger.info(f"📡 Machine {self.machine_id} 注册结果: {result}")
         except Exception as e:
@@ -201,45 +209,33 @@ class MachineAgent(MCPAgent):
                             except:
                                 commands = []
 
-                        # 处理命令列表
+                                                # 处理命令列表 - 挤占式执行（只执行最新命令）
                         if isinstance(commands, list):
+                            # 找到最新的待处理命令
+                            latest_command = None
                             for command_data in commands:
                                 if isinstance(command_data, dict) and command_data.get("status") == "pending":
-                                    command_id = command_data.get("command_id")
-                                    if command_id:
-                                        logger.info(f"🤖 Machine {self.machine_id} 收到命令: {command_data}")
+                                    latest_command = command_data
 
-                                        # 更新命令状态为执行中
-                                        await self.call_tool("mcp_python_update_command_status",
-                                                           command_id=command_id,
-                                                           status="executing")
+                            # 如果有新命令，执行挤占逻辑
+                            if latest_command:
+                                await self._preempt_and_execute_command(latest_command)
 
-                                        # 执行命令
-                                        await self._execute_command(command_data)
-
-                                        # 更新命令状态为完成
-                                        await self.call_tool("mcp_python_update_command_status",
-                                                           command_id=command_id,
-                                                           status="completed")
-
-                        # 处理命令字典（兼容旧格式）
+                                                # 处理命令字典（兼容旧格式）- 挤占式执行
                         elif isinstance(commands, dict):
+                            # 找到最新的待处理命令
+                            latest_command = None
+                            latest_command_id = None
                             for command_id, command_data in commands.items():
                                 if command_data.get("status") == "pending":
-                                    logger.info(f"🤖 Machine {self.machine_id} 收到命令: {command_data}")
+                                    latest_command = command_data
+                                    latest_command_id = command_id
 
-                                    # 更新命令状态为执行中
-                                    await self.call_tool("mcp_python_update_command_status",
-                                                       command_id=command_id,
-                                                       status="executing")
-
-                                    # 执行命令
-                                    await self._execute_command(command_data)
-
-                                    # 更新命令状态为完成
-                                    await self.call_tool("mcp_python_update_command_status",
-                                                       command_id=command_id,
-                                                       status="completed")
+                            # 如果有新命令，执行挤占逻辑
+                            if latest_command:
+                                # 确保command_data包含command_id
+                                latest_command["command_id"] = latest_command_id
+                                await self._preempt_and_execute_command(latest_command)
 
                     # 等待一段时间再检查
                     await asyncio.sleep(1)
@@ -253,6 +249,77 @@ class MachineAgent(MCPAgent):
         except Exception as e:
             logger.error(f"Machine {self.machine_id} 命令监听器异常: {e}")
 
+    async def _preempt_and_execute_command(self, new_command_data: dict) -> None:
+        """挤占式命令执行：取消当前命令，执行新命令"""
+        new_command_id = new_command_data.get("command_id")
+
+        # 如果有正在执行的命令，先取消它
+        if self.current_command_task and not self.current_command_task.done():
+            old_command_id = self.current_command_id
+            logger.info(f"🔄 Machine {self.machine_id} 新命令 {new_command_id} 挤占旧命令 {old_command_id}")
+
+            # 取消当前任务
+            self.current_command_task.cancel()
+            try:
+                await self.current_command_task
+            except asyncio.CancelledError:
+                logger.info(f"✅ Machine {self.machine_id} 成功取消旧命令 {old_command_id}")
+
+            # 更新旧命令状态为已取消
+            if old_command_id:
+                await self.call_tool("mcp_python_update_command_status",
+                                   command_id=old_command_id,
+                                   status="cancelled",
+                                   error="Preempted by new command")
+
+        # 执行新命令
+        logger.info(f"🤖 Machine {self.machine_id} 开始执行新命令: {new_command_data}")
+        self.current_command_id = new_command_id
+        self.current_command = new_command_data
+
+        # 创建新的命令执行任务
+        self.current_command_task = asyncio.create_task(
+            self._process_single_command(new_command_data)
+        )
+
+        # 等待命令完成（如果被取消会抛出异常）
+        try:
+            await self.current_command_task
+        except asyncio.CancelledError:
+            logger.info(f"⚡ Machine {self.machine_id} 命令 {new_command_id} 被新命令挤占")
+            raise
+        finally:
+            # 清理状态
+            if self.current_command_id == new_command_id:  # 确保是当前命令
+                self.current_command_task = None
+                self.current_command_id = None
+                self.current_command = None
+
+    async def _process_single_command(self, command_data: dict) -> None:
+        """处理单个命令（包含状态更新）"""
+        command_id = command_data.get("command_id")
+        try:
+            # 更新命令状态为执行中
+            await self.call_tool("mcp_python_update_command_status",
+                               command_id=command_id,
+                               status="executing")
+
+            # 执行命令
+            await self._execute_command(command_data)
+
+            # 更新命令状态为完成
+            await self.call_tool("mcp_python_update_command_status",
+                               command_id=command_id,
+                               status="completed")
+
+        except Exception as e:
+            logger.error(f"Machine {self.machine_id} 处理命令 {command_id} 失败: {e}")
+            # 更新命令状态为失败
+            await self.call_tool("mcp_python_update_command_status",
+                               command_id=command_id,
+                               status="failed",
+                               error=str(e))
+
     async def _execute_command(self, command_data: dict) -> None:
         """执行具体的命令"""
         try:
@@ -262,20 +329,52 @@ class MachineAgent(MCPAgent):
             logger.info(f"🤖 Machine {self.machine_id} 执行命令: {command_type}")
 
             if command_type == "move_to":
-                # 移动命令
+                # 直接移动命令
                 position = parameters.get("position", [0, 0, 0])
                 await self.call_tool("mcp_python_movement",
                                    machine_id=self.machine_id,
                                    coordinates=position)
 
+            elif command_type == "step_move":
+                # 逐步移动命令
+                direction = parameters.get("direction", [1, 0, 0])
+                distance = parameters.get("distance", 1.0)
+                await self.call_tool("mcp_python_step_movement",
+                                   machine_id=self.machine_id,
+                                   direction=direction,
+                                   distance=distance)
+
             elif command_type == "check_environment":
                 # 检查环境命令
-                await self.call_tool("mcp_python_check_environment")
+                await self.call_tool("mcp_python_check_environment", machine_id=self.machine_id)
 
-            elif command_type == "action":
-                # 执行动作命令
-                action_type = parameters.get("action_type", "default")
-                await self.call_tool("mcp_python_machine_action", action_type=action_type)
+            elif command_type == "laser_attack":
+                # 激光攻击命令
+                range_val = parameters.get("range", 5.0)
+                damage = parameters.get("damage", 1)
+                await self.call_tool("mcp_python_laser_attack",
+                                   machine_id=self.machine_id,
+                                   range=range_val,
+                                   damage=damage)
+                # 设置last_action以便前端检测（添加时间戳确保唯一性）
+                timestamp = int(time.time() * 1000)  # 毫秒时间戳
+                self.last_action = f"laser_attack(range:{range_val}, damage:{damage}, time:{timestamp})"
+
+            elif command_type == "perform_action":
+                # 兼容旧的perform_action命令，转换为具体攻击类型
+                action = parameters.get("action", "")
+                if action == "laser_attack":
+                    range_val = parameters.get("range", 5.0)
+                    damage = parameters.get("damage", 1)
+                    await self.call_tool("mcp_python_laser_attack",
+                                       machine_id=self.machine_id,
+                                       range=range_val,
+                                       damage=damage)
+                    # 设置last_action以便前端检测（添加时间戳确保唯一性）
+                    timestamp = int(time.time() * 1000)  # 毫秒时间戳
+                    self.last_action = f"laser_attack(range:{range_val}, damage:{damage}, time:{timestamp})"
+                else:
+                    logger.warning(f"Machine {self.machine_id} 不支持的动作类型: {action}")
 
             else:
                 logger.warning(f"Machine {self.machine_id} 未知命令类型: {command_type}")
@@ -375,9 +474,16 @@ class MachineAgent(MCPAgent):
         if command_type == "move_to":
             return await self.handle_move_to_command(parameters)
         elif command_type == "perform_action":
-            return await self.handle_action_command(parameters)
+            # 兼容旧的perform_action命令，转换为具体攻击类型
+            action = parameters.get("action", "")
+            if action == "laser_attack":
+                return await self.handle_laser_attack_command(parameters)
+            else:
+                return f"不支持的动作类型: {action}"
         elif command_type == "check_environment":
             return await self.handle_environment_check_command(parameters)
+        elif command_type == "laser_attack":
+            return await self.handle_laser_attack_command(parameters)
         else:
             return f"未知命令类型: {command_type}"
 
@@ -418,42 +524,13 @@ class MachineAgent(MCPAgent):
         except Exception as e:
             return f"移动命令失败: {str(e)}"
 
-    async def handle_action_command(self, parameters: Dict[str, Any]) -> str:
-        """处理动作命令"""
-        try:
-            action_type = parameters.get("action_type", "generic")
-            target = parameters.get("target", "")
-
-            # 添加动作提示
-            from app.schema import Message
-            current_x, current_y, current_z = self.location.coordinates[0], self.location.coordinates[1], self.location.coordinates[2] if len(self.location.coordinates) > 2 else 0.0
-            self.memory.add_message(Message.system_message(
-                ACTION_COMMAND_PROMPT.format(
-                    action_type=action_type,
-                    target=target,
-                    current_position=f"({current_x}, {current_y}, {current_z})"
-                )
-            ))
-
-            # 使用MCP工具执行动作
-            result = await self.call_tool(
-                "mcp_python_machine_action",
-                machine_id=self.machine_id,
-                action_type=action_type
-            )
-
-            self.last_action = f"action({action_type})"
-            await self.update_status()
-            return f"Machine {self.machine_id} 执行动作: {action_type}"
-
-        except Exception as e:
-            return f"动作命令失败: {str(e)}"
+    # Note: Generic action handling removed - use specific action tools like laser_attack
 
     async def handle_environment_check_command(self, parameters: Dict[str, Any]) -> str:
         """处理环境检查命令"""
         try:
             check_type = parameters.get("check_type", "general")
-            radius = parameters.get("radius", 10.0)
+            radius = parameters.get("radius", 3.0)
 
             # 添加环境检查提示
             from app.schema import Message
@@ -480,8 +557,40 @@ class MachineAgent(MCPAgent):
         except Exception as e:
             return f"环境检查失败: {str(e)}"
 
+    async def handle_laser_attack_command(self, parameters: Dict[str, Any]) -> str:
+        """处理激光攻击命令"""
+        try:
+            range_val = parameters.get("range", 5.0)
+            damage = parameters.get("damage", 1)
+
+            # 使用MCP工具执行激光攻击
+            result = await self.call_tool(
+                "mcp_python_laser_attack",
+                machine_id=self.machine_id,
+                range=range_val,
+                damage=damage
+            )
+
+            self.last_action = f"laser_attack(range:{range_val}, damage:{damage})"
+            await self.update_status()
+            return f"Machine {self.machine_id} 发射激光攻击 (射程: {range_val}, 伤害: {damage})"
+
+        except Exception as e:
+            return f"激光攻击失败: {str(e)}"
+
     async def update_status(self) -> None:
         """更新机器人状态"""
+        # 更新世界管理器中的last_action
+        if self.last_action:
+            try:
+                await self.call_tool(
+                    "mcp_python_update_machine_action",
+                    machine_id=self.machine_id,
+                    action=self.last_action
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update machine action: {e}")
+
         # 添加状态更新提示
         from app.schema import Message
         x, y, z = self.location.coordinates[0], self.location.coordinates[1], self.location.coordinates[2] if len(self.location.coordinates) > 2 else 0.0
@@ -537,7 +646,8 @@ class MachineAgent(MCPAgent):
 async def create_smart_machine(machine_id: str = None,
                               location: Position = None,
                               life_value: int = 10,
-                              machine_type: str = "worker") -> MachineAgent:
+                              machine_type: str = "worker",
+                              size: float = 1.0) -> MachineAgent:
     """
     便捷创建和初始化Smart Machine
 
@@ -546,6 +656,7 @@ async def create_smart_machine(machine_id: str = None,
         location: 初始位置
         life_value: 生命值
         machine_type: 机器人类型
+        size: 机器人大小（碰撞检测半径）
 
     Returns:
         已初始化的Smart Machine
@@ -554,7 +665,8 @@ async def create_smart_machine(machine_id: str = None,
         machine_id=machine_id,
         location=location or Position(0.0, 0.0, 0.0),
         life_value=life_value,
-        machine_type=machine_type
+        machine_type=machine_type,
+        size=size
     )
     await machine.initialize()
     return machine

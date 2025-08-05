@@ -193,8 +193,8 @@ class ControlMachineTool(BaseTool):
 
     async def _simulate_environment_check(self, machine_id: str, command: str) -> str:
         """Simulate environment check command."""
-        # Extract radius from command, default to 10.0
-        radius = 10.0
+        # Extract radius from command, default to 3.0
+        radius = 3.0
         import re
         radius_match = re.search(r'radius[:\s]+(\d+(?:\.\d+)?)', command.lower())
         if radius_match:
@@ -205,8 +205,8 @@ class ControlMachineTool(BaseTool):
         if not machine_info:
             return f"Machine {machine_id} not found"
 
-        # Get nearby machines
-        nearby_machines = world_manager.get_nearby_machines(machine_id, radius)
+        # Get nearby machines using square distance
+        nearby_machines = world_manager.get_nearby_machines(machine_id, radius, use_square_distance=True)
 
         # Build report
         report = f"Machine {machine_id} environment scan:\n"
@@ -216,7 +216,7 @@ class ControlMachineTool(BaseTool):
         report += f"Nearby machines ({len(nearby_machines)}):\n"
 
         for machine in nearby_machines:
-            distance = machine_info.position.distance_to(machine.position)
+            distance = machine_info.position.square_distance_to(machine.position)
             report += f"  - {machine.machine_id}: {machine.position} (distance: {distance:.2f})\n"
 
         world_manager.update_machine_action(machine_id, f"environment_check_radius_{radius}")

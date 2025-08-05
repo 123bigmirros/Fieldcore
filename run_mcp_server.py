@@ -153,9 +153,108 @@ def create_http_server(mcp_server):
                 for machine_id in machines_data.keys():
                     asyncio.run(mcp_server.server.call_tool('remove_machine', {'machine_id': machine_id}))
 
+                # 清除所有障碍物
+                asyncio.run(mcp_server.server.call_tool('clear_all_obstacles', {}))
+
                 return jsonify({'status': 'ok', 'message': 'World reset successfully'})
             else:
                 return jsonify({'error': 'Failed to reset world'}), 500
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # 障碍物管理端点
+    @app.route('/mcp/obstacles', methods=['GET'])
+    def get_obstacles():
+        """获取所有障碍物信息"""
+        try:
+            result = asyncio.run(mcp_server.server.call_tool('get_all_obstacles', {}))
+
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+                return jsonify(content_str)
+            else:
+                return jsonify({'error': 'Failed to get obstacles'}), 500
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/mcp/obstacles', methods=['POST'])
+    def add_obstacle():
+        """添加障碍物"""
+        try:
+            data = request.get_json()
+            obstacle_id = data.get('obstacle_id')
+            position = data.get('position', [0, 0, 0])
+            size = data.get('size', 1.0)
+            obstacle_type = data.get('obstacle_type', 'static')
+
+            if not obstacle_id:
+                return jsonify({'error': 'obstacle_id is required'}), 400
+
+            result = asyncio.run(mcp_server.server.call_tool('add_obstacle', {
+                'obstacle_id': obstacle_id,
+                'position': position,
+                'size': size,
+                'obstacle_type': obstacle_type
+            }))
+
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+                return jsonify({'result': content_str})
+            else:
+                return jsonify({'result': str(result)})
+
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/mcp/obstacles/<obstacle_id>', methods=['DELETE'])
+    def remove_obstacle(obstacle_id):
+        """移除障碍物"""
+        try:
+            result = asyncio.run(mcp_server.server.call_tool('remove_obstacle', {'obstacle_id': obstacle_id}))
+
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+                return jsonify({'result': content_str})
+            else:
+                return jsonify({'result': str(result)})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/mcp/collision/check', methods=['POST'])
+    def check_collision():
+        """检查碰撞"""
+        try:
+            data = request.get_json()
+            position = data.get('position', [0, 0, 0])
+            size = data.get('size', 1.0)
+            exclude_machine_id = data.get('exclude_machine_id')
+
+            params = {
+                'position': position,
+                'size': size
+            }
+            if exclude_machine_id:
+                params['exclude_machine_id'] = exclude_machine_id
+
+            result = asyncio.run(mcp_server.server.call_tool('check_collision', params))
+
+            if isinstance(result, list):
+                content_str = ""
+                for content in result:
+                    if hasattr(content, 'text'):
+                        content_str += content.text
+                return jsonify(content_str)
+            else:
+                return jsonify({'result': str(result)})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
