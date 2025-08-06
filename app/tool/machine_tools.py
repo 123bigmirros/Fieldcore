@@ -320,8 +320,8 @@ class LaserAttackTool(MachineActionTool):
             },
             "range": {
                 "type": "number",
-                "description": "Maximum range of the laser attack (default: 5.0)",
-                "default": 5.0,
+                "description": "Maximum range of the laser attack (default: unlimited - goes to world boundary)",
+                "default": 999.0,
             },
             "damage": {
                 "type": "number",
@@ -332,28 +332,39 @@ class LaserAttackTool(MachineActionTool):
         "required": ["machine_id"],
     }
 
-    async def _perform_action(self, machine_id: str, laser_range: float = 5.0, damage: int = 1, **kwargs) -> ToolResult:
+    async def _perform_action(self, machine_id: str, laser_range: float = 999.0, damage: int = 1, **kwargs) -> ToolResult:
         """Execute laser attack logic."""
         try:
             # Get attacker machine info (already validated by parent)
             attacker = world_manager.get_machine_info(machine_id)
 
-            # Calculate laser path
-            laser_path = self._calculate_laser_path(attacker, laser_range)
+            # Calculate laser path using grid-based algorithm (ignore range limit, go to world boundary)
+            full_laser_path = self._calculate_laser_path(attacker, laser_range)
 
             # Find first collision (obstacle or machine)
-            hit_result = self._find_laser_collision(attacker, laser_path)
+            hit_result = self._find_laser_collision(attacker, full_laser_path)
 
-            # Build attack result
+            # 根据碰撞结果截断激光路径
+            if hit_result["hit_type"] != "none" and "path_index" in hit_result:
+                # 截断到碰撞点（包含碰撞点）
+                actual_laser_path = full_laser_path[:hit_result["path_index"] + 1]
+            else:
+                # 没有碰撞，使用完整路径
+                actual_laser_path = full_laser_path
+
+            # Build attack result with grid information
             attack_data = {
                 "attacker_id": machine_id,
-                "attacker_position": str(attacker.position),
+                "attacker_position": [round(attacker.position.coordinates[0]), round(attacker.position.coordinates[1])],
                 "facing_direction": list(attacker.facing_direction),
                 "laser_range": laser_range,
-                "laser_path": [[p.coordinates[0], p.coordinates[1]] for p in laser_path],
+                "laser_path_grids": [{"x": round(p.coordinates[0]), "y": round(p.coordinates[1])} for p in actual_laser_path],
+                "laser_start_pos": [round(attacker.position.coordinates[0]), round(attacker.position.coordinates[1])],
+                "laser_end_pos": [round(actual_laser_path[-1].coordinates[0]), round(actual_laser_path[-1].coordinates[1])] if actual_laser_path else [round(attacker.position.coordinates[0]), round(attacker.position.coordinates[1])],
                 "hit_result": hit_result,
                 "damage_dealt": damage if hit_result.get("hit_machine") else 0,
-                "target_destroyed": False
+                "target_destroyed": False,
+                "actual_range": len(actual_laser_path) - 1  # 不计算起始网格
             }
 
             # Apply damage if a machine was hit
@@ -368,9 +379,9 @@ class LaserAttackTool(MachineActionTool):
                     destroyed = await self._handle_machine_destruction(target_id)
                     attack_data["target_destroyed"] = destroyed
 
-            # Set action description for parent class (add timestamp for uniqueness)
+            # Set action description with attack result data for frontend (add timestamp for uniqueness)
             timestamp = int(time.time() * 1000)  # 毫秒时间戳
-            self._last_action_description = f"laser_attack_range_{laser_range}_damage_{damage}_time_{timestamp}"
+            self._last_action_description = f"laser_attack_range_{laser_range}_damage_{damage}_time_{timestamp}_result_{json.dumps(attack_data)}"
 
             return ToolResult(output=json.dumps(attack_data, indent=2, ensure_ascii=False))
 
@@ -378,58 +389,153 @@ class LaserAttackTool(MachineActionTool):
             return ToolResult(error=f"Laser attack failed: {str(e)}")
 
     def _calculate_laser_path(self, attacker, laser_range: float) -> List[Position]:
-        """Calculate the path of the laser beam."""
-        path = []
-
-        # Start from attacker position
-        start_x, start_y = attacker.position.coordinates[0], attacker.position.coordinates[1]
+        """Calculate the laser path to world boundary using grid-based Bresenham algorithm."""
+        # 将起始坐标对齐到网格中心
+        start_x = round(attacker.position.coordinates[0])
+        start_y = round(attacker.position.coordinates[1])
         dx, dy = attacker.facing_direction
 
-        # Calculate path points with fine granularity
-        step_size = 0.1
-        steps = int(laser_range / step_size)
+        # 计算到世界边界的最大射程（而不是固定5格）
+        world_bounds = world_manager.world_bounds  # (-100, 100)
+        min_bound, max_bound = world_bounds
 
-        for i in range(steps + 1):
-            distance = i * step_size
-            x = start_x + dx * distance
-            y = start_y + dy * distance
-            path.append(Position(x, y, 0.0))
+        # 计算在当前方向上能到达的最远网格
+        if dx > 0:  # 向右
+            max_x = max_bound
+        elif dx < 0:  # 向左
+            max_x = min_bound
+        else:  # 不移动
+            max_x = start_x
+
+        if dy > 0:  # 向上
+            max_y = max_bound
+        elif dy < 0:  # 向下
+            max_y = min_bound
+        else:  # 不移动
+            max_y = start_y
+
+        # 计算到边界的距离
+        if dx != 0:
+            steps_x = abs((max_x - start_x) / dx)
+        else:
+            steps_x = float('inf')
+
+        if dy != 0:
+            steps_y = abs((max_y - start_y) / dy)
+        else:
+            steps_y = float('inf')
+
+        # 选择最小步数（先到达的边界）
+        max_steps = min(steps_x, steps_y)
+        if max_steps == float('inf'):
+            max_steps = max(abs(max_bound - start_x), abs(max_bound - start_y))
+
+        # 计算实际终点
+        end_x = start_x + round(dx * max_steps)
+        end_y = start_y + round(dy * max_steps)
+
+        # 确保终点在世界边界内
+        end_x = max(min_bound, min(max_bound, end_x))
+        end_y = max(min_bound, min(max_bound, end_y))
+
+        # 使用Bresenham算法计算网格路径
+        grids = self._get_line_grids(start_x, start_y, end_x, end_y)
+
+        # 转换为Position对象列表
+        path = []
+        for grid in grids:
+            path.append(Position(grid["x"], grid["y"], 0.0))
 
         return path
 
-    def _find_laser_collision(self, attacker, laser_path: List[Position]) -> dict:
-        """Find the first collision along the laser path."""
-        result = {"hit_type": "none", "hit_position": None}
+    def _get_line_grids(self, start_x: int, start_y: int, end_x: int, end_y: int) -> List[dict]:
+        """使用Bresenham算法计算直线上的网格点"""
+        grids = [{"x": start_x, "y": start_y}]
 
-        for point in laser_path[1:]:  # Skip starting position
-            # Check for obstacle collision
-            obstacles = world_manager.get_obstacles_in_area(point, 0.5, use_square_distance=True)
-            if obstacles:
+        # Bresenham直线算法
+        x, y = start_x, start_y
+        delta_x = abs(end_x - start_x)
+        delta_y = abs(end_y - start_y)
+        step_x = 1 if start_x < end_x else -1
+        step_y = 1 if start_y < end_y else -1
+        error = delta_x - delta_y
+
+        while x != end_x or y != end_y:
+            error2 = 2 * error
+
+            if error2 > -delta_y:
+                error -= delta_y
+                x += step_x
+
+            if error2 < delta_x:
+                error += delta_x
+                y += step_y
+
+            grids.append({"x": x, "y": y})
+
+            # 防止无限循环
+            if len(grids) > 100:  # 安全限制
+                break
+
+        return grids
+
+    def _find_laser_collision(self, attacker, laser_path: List[Position]) -> dict:
+        """Find the first collision along the grid-based laser path."""
+        result = {"hit_type": "none", "hit_position": None, "collision_grid": None}
+
+        # 创建实体位置的网格映射
+        grid_obstacles = {}
+        grid_machines = {}
+
+        # 将障碍物映射到网格
+        all_obstacles = world_manager.get_all_obstacles()
+        for obstacle_id, obstacle in all_obstacles.items():
+            obs_x = round(obstacle.position.coordinates[0])
+            obs_y = round(obstacle.position.coordinates[1])
+            grid_key = f"{obs_x},{obs_y}"
+            grid_obstacles[grid_key] = obstacle
+
+        # 将机器人映射到网格（排除发射者）
+        all_machines = world_manager.get_all_machines()
+        for machine_id, machine in all_machines.items():
+            if machine_id == attacker.machine_id:  # 排除自己
+                continue
+            if machine.status != "active":  # 排除非活跃机器
+                continue
+
+            mach_x = round(machine.position.coordinates[0])
+            mach_y = round(machine.position.coordinates[1])
+            grid_key = f"{mach_x},{mach_y}"
+            grid_machines[grid_key] = machine
+
+        # 检查路径上每个网格的碰撞（跳过起始网格）
+        for i, point in enumerate(laser_path[1:], 1):
+            grid_x = round(point.coordinates[0])
+            grid_y = round(point.coordinates[1])
+            grid_key = f"{grid_x},{grid_y}"
+
+            # 检查障碍物碰撞
+            if grid_key in grid_obstacles:
+                obstacle = grid_obstacles[grid_key]
                 result = {
                     "hit_type": "obstacle",
-                    "hit_position": [point.coordinates[0], point.coordinates[1]],
-                    "hit_obstacle": obstacles[0].obstacle_id
+                    "hit_position": [grid_x, grid_y],
+                    "hit_obstacle": obstacle.obstacle_id,
+                    "collision_grid": {"x": grid_x, "y": grid_y},
+                    "path_index": i
                 }
                 break
 
-            # Check for machine collision - get all machines and check distance
-            all_machines = world_manager.get_all_machines()
-            for machine_id, machine in all_machines.items():
-                if machine_id == attacker.machine_id:  # Skip self
-                    continue
-
-                machine_pos = machine.position
-                # Check if laser point is close to this machine
-                if (abs(point.coordinates[0] - machine_pos.coordinates[0]) < 0.5 and
-                    abs(point.coordinates[1] - machine_pos.coordinates[1]) < 0.5):
-                    result = {
-                        "hit_type": "machine",
-                        "hit_position": [point.coordinates[0], point.coordinates[1]],
-                        "hit_machine": machine.machine_id
-                    }
-                    break
-
-            if result["hit_type"] != "none":
+            # 检查机器人碰撞
+            if grid_key in grid_machines:
+                machine = grid_machines[grid_key]
+                result = {
+                    "hit_type": "machine",
+                    "hit_position": [grid_x, grid_y],
+                    "hit_machine": machine.machine_id,
+                    "collision_grid": {"x": grid_x, "y": grid_y},
+                    "path_index": i
+                }
                 break
 
         return result

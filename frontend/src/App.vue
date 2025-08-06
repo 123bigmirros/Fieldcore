@@ -33,7 +33,11 @@
             :key="'laser-' + laser.id"
             class="laser-beam"
             :style="getLaserStyle(laser)"
+            :title="`激光 ${laser.id}`"
           ></div>
+
+          <!-- 网格辅助线 -->
+          <div v-if="showGrid" class="grid-overlay"></div>
 
         </div>
       </div>
@@ -62,13 +66,27 @@ export default {
       obstacles: [],
       refreshInterval: null,
       activeLasers: [], // 活跃的激光特效
+      laserVisionAreas: [], // 激光路径的临时视野区域
       shownAttacks: [], // 已经显示过的攻击，避免重复
+      showGrid: false // 是否显示网格辅助线
     }
   },
   mounted() {
     this.startAutoRefresh()
     // 监听窗口大小变化，确保网格中心正确
     window.addEventListener('resize', this.forceUpdate)
+
+    // 添加键盘调试快捷键
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'd' && e.ctrlKey) {
+        e.preventDefault()
+        this.showDebugInfo()
+      }
+      if (e.key === 'g' && e.ctrlKey) {
+        e.preventDefault()
+        this.toggleGridOverlay()
+      }
+    })
   },
   beforeUnmount() {
     this.stopAutoRefresh()
@@ -98,8 +116,8 @@ export default {
             facing_direction: machine.facing_direction || [1.0, 0.0]
           }))
 
-          // 检查是否有激光攻击效果需要显示
-          this.checkForLaserEffects(machines)
+          // 检查是否有激光攻击效果需要显示（使用处理后的数据）
+          this.checkForLaserEffects(this.machines)
         }
       } catch (error) {
         // 只在请求失败时清空
@@ -203,83 +221,210 @@ export default {
       const dy = Math.abs(pos1[1] - pos2[1])
       return Math.max(dx, dy)
     },
-    // 检查机器人是否在任何其他机器人的可见范围内
+    // 检查机器人是否在可见范围内
     isMachineVisible(machine) {
-      return this.machines.some(observer => {
-        if (observer.machine_id === machine.machine_id) return true
-        return this.squareDistance(observer.position, machine.position) <= observer.visibility_radius
-      })
+      return this.isPositionVisible(machine.position)
     },
-    // 检查障碍物是否在任何机器人的可见范围内
+    // 检查障碍物是否在可见范围内
     isObstacleVisible(obstacle) {
-      return this.machines.some(machine => {
-        return this.squareDistance(machine.position, obstacle.position) <= machine.visibility_radius
+      return this.isPositionVisible(obstacle.position)
+    },
+    // 检查位置是否可见（包括正常视野和激光路径视野）
+    isPositionVisible(position) {
+      // 检查正常机器人视野
+      const inNormalVision = this.machines.some(machine => {
+        return this.squareDistance(position, machine.position) <= machine.visibility_radius
       })
+
+      // 检查激光路径视野
+      const inLaserVision = this.laserVisionAreas.some(area => {
+        const distance = this.squareDistance(position, area.center)
+        return distance <= area.radius
+      })
+
+      return inNormalVision || inLaserVision
     },
 
     // 检查是否有激光攻击效果
     checkForLaserEffects(machines) {
+      console.log(`🔍 检查激光攻击效果，机器人数量: ${machines.length}`)
       machines.forEach(machine => {
-        // 检查机器人的最后动作是否为激光攻击
+        if (machine.last_action) {
+          console.log(`📡 机器人${machine.machine_id}的最后动作: ${machine.last_action}`)
+        }
         if (machine.last_action && machine.last_action.includes('laser_attack')) {
-          console.log(`检测到激光攻击: ${machine.machine_id} - ${machine.last_action}`)
-
-          // 从last_action中提取时间戳来判断是否是新的攻击
+          console.log(`🎯 发现激光攻击: ${machine.machine_id}`)
           const timeMatch = machine.last_action.match(/time:(\d+)/)
           if (timeMatch) {
-            const attackTimestamp = timeMatch[1]
-            const attackId = `${machine.machine_id}_${attackTimestamp}`
-
+            const attackId = `${machine.machine_id}_${timeMatch[1]}`
             if (!this.shownAttacks.includes(attackId)) {
-              console.log(`显示激光特效: ${machine.machine_id} (时间戳: ${attackTimestamp})`)
-              this.showLaserEffect(machine)
+              console.log(`🚀 创建新的激光特效: ${machine.machine_id}`)
+              this.createLaserEffect(machine)
               this.shownAttacks.push(attackId)
               // 限制历史记录大小
               if (this.shownAttacks.length > 50) {
                 this.shownAttacks = this.shownAttacks.slice(-25)
               }
             } else {
-              console.log(`攻击已显示过: ${attackId}`)
+              console.log(`⏭️  激光攻击已显示过: ${attackId}`)
             }
           } else {
-            // 兼容旧格式（没有时间戳）
+            // 兼容旧格式
             const attackId = `${machine.machine_id}_${machine.last_action}`
             if (!this.shownAttacks.includes(attackId)) {
-              console.log(`显示激光特效: ${machine.machine_id} (旧格式)`)
-              this.showLaserEffect(machine)
+              console.log(`🚀 创建激光特效(旧格式): ${machine.machine_id}`)
+              this.createLaserEffect(machine)
               this.shownAttacks.push(attackId)
+            } else {
+              console.log(`⏭️  激光攻击已显示过(旧格式): ${attackId}`)
             }
           }
         }
       })
     },
-    // 显示激光特效
-    showLaserEffect(machine) {
-      const laserId = Date.now() + Math.random()
+    // 从machine的last_action中解析后端计算的激光攻击结果
+    parseLaserActionData(machine) {
+      const timestamp = machine.last_action.match(/time:(\d+)/)
+      const effectId = timestamp ? timestamp[1] : Date.now().toString()
+
+      // 尝试从last_action中提取后端计算的完整结果
+      const resultMatch = machine.last_action.match(/result_(.+)$/)
+      if (resultMatch) {
+        try {
+          const backendResult = JSON.parse(resultMatch[1])
+          console.log(`✅ 使用后端计算的激光数据:`, backendResult)
+
+          return {
+            effectId: effectId,
+            attacker_position: backendResult.attacker_position,
+            facing_direction: backendResult.facing_direction,
+            laser_start_pos: backendResult.laser_start_pos,
+            laser_end_pos: backendResult.laser_end_pos,
+            laser_path_grids: backendResult.laser_path_grids,
+            actual_range: backendResult.actual_range,
+            hit_result: backendResult.hit_result
+          }
+        } catch (e) {
+          console.warn(`⚠️ 解析后端激光数据失败:`, e)
+        }
+      }
+
+      // 降级方案：使用简化数据
+      const rangeMatch = machine.last_action.match(/range_([0-9.]+)/)
+      const range = rangeMatch ? parseFloat(rangeMatch[1]) : 5.0
+
       const [x, y] = machine.position
       const [dx, dy] = machine.facing_direction
 
-      console.log(`创建激光特效: 机器人${machine.machine_id} 位置(${x},${y}) 朝向(${dx},${dy})`)
+      console.log(`⚠️ 降级方案：前端显示完整${range}格激光`)
 
-      // 计算激光终点（假设射程为5）
-      const range = 5.0
-      const endX = x + dx * range
-      const endY = y + dy * range
+      return {
+        effectId: effectId,
+        attacker_position: [x, y],
+        facing_direction: [dx, dy],
+        laser_start_pos: [x, y],
+        laser_end_pos: [x + dx * range, y + dy * range],
+        laser_path_grids: this.generateSimpleGridPath(x, y, dx, dy, range),
+        actual_range: range,
+        hit_result: {hit_type: "fallback"} // 表示降级方案
+      }
+    },
 
+    // 生成简单的网格路径（纯显示用）
+    generateSimpleGridPath(x, y, dx, dy, range) {
+      const grids = []
+      const startX = Math.round(x)
+      const startY = Math.round(y)
+
+      for (let i = 0; i <= range; i++) {
+        grids.push({
+          x: startX + Math.round(dx * i),
+          y: startY + Math.round(dy * i)
+        })
+      }
+
+      return grids
+    },
+
+
+
+    // 创建激光特效（基于后端数据）
+    createLaserEffect(machine) {
+      console.log(`⚡ 开始创建激光特效，机器人${machine.machine_id}`)
+
+      // 解析激光攻击数据
+      const laserData = this.parseLaserActionData(machine)
+
+      console.log(`🔫 激光数据解析完成: 起点(${laserData.laser_start_pos[0]}, ${laserData.laser_start_pos[1]}) -> 终点(${laserData.laser_end_pos[0]}, ${laserData.laser_end_pos[1]})`)
+
+      // 创建激光束特效（0.5秒）
       const laser = {
-        id: laserId,
-        startPos: [x, y],
-        endPos: [endX, endY],
+        id: laserData.effectId,
+        startPos: laserData.laser_start_pos,
+        endPos: laserData.laser_end_pos,
+        pathGrids: laserData.laser_path_grids,
         timestamp: Date.now()
       }
 
       this.activeLasers.push(laser)
-      console.log(`激光特效已添加，当前活跃激光数量: ${this.activeLasers.length}`)
+      console.log(`⚡ 激光特效已添加到数组，当前活跃激光数量: ${this.activeLasers.length}`)
 
-      // 3秒后移除激光特效（增加显示时长）
       setTimeout(() => {
-        this.activeLasers = this.activeLasers.filter(l => l.id !== laserId)
-        console.log(`激光特效已移除，剩余激光数量: ${this.activeLasers.length}`)
+        this.activeLasers = this.activeLasers.filter(l => l.id !== laserData.effectId)
+        console.log(`🔄 激光特效已移除，剩余激光数量: ${this.activeLasers.length}`)
+      }, 500) // 0.5秒后移除激光束
+
+      // 创建激光路径周围的临时视野（3秒）
+      this.createLaserVision({pathGrids: laserData.laser_path_grids}, laserData.effectId)
+    },
+
+    // 网格坐标转换为屏幕坐标
+    gridToPixel(gridX, gridY) {
+      const gridSize = 30
+      const worldCenter = {
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2
+      }
+
+      return {
+        x: worldCenter.x + gridX * gridSize,
+        y: worldCenter.y - gridY * gridSize // 反转Y轴
+      }
+    },
+
+    // 从后端API获取激光攻击结果（未来实现）
+    async fetchLaserAttackResult(machineId, timestamp) {
+      // TODO: 实现从后端API获取激光攻击的完整结果
+      // 包括精确的路径、碰撞点、伤害等信息
+      // 目前使用简化的方法
+      return null
+    },
+
+    // 创建激光路径的临时视野（基于网格）
+    createLaserVision(laserPath, effectId) {
+      // 为激光路径上的每个网格创建视野区域
+      const visionGrids = laserPath.pathGrids
+
+      visionGrids.forEach((grid, index) => {
+        const visionArea = {
+          id: `${effectId}_${index}`,
+          center: [grid.x, grid.y], // 网格中心坐标
+          radius: 2, // 2格视野范围
+          timestamp: Date.now()
+        }
+
+        this.laserVisionAreas.push(visionArea)
+      })
+
+      console.log(`👁️ 创建了${visionGrids.length}个网格激光视野区域，持续3秒`)
+
+      // 3秒后移除激光视野
+      setTimeout(() => {
+        const beforeCount = this.laserVisionAreas.length
+        this.laserVisionAreas = this.laserVisionAreas.filter(area =>
+          !area.id.startsWith(`${effectId}_`)
+        )
+        console.log(`🔄 激光视野已移除 (${beforeCount - this.laserVisionAreas.length}个区域)`)
       }, 3000)
     },
     // 获取机器人朝向指示器样式
@@ -290,39 +435,72 @@ export default {
         transform: `rotate(${angle}deg)`
       }
     },
-    // 获取激光特效样式
+    // 获取激光特效样式（基于网格坐标）
     getLaserStyle(laser) {
-      const gridSize = 30
-      const worldCenter = {
-        x: window.innerWidth / 2,
-        y: window.innerHeight / 2
-      }
+      const [startGridX, startGridY] = laser.startPos
+      const [endGridX, endGridY] = laser.endPos
 
-      const [startX, startY] = laser.startPos
-      const [endX, endY] = laser.endPos
+      // 转换为屏幕坐标
+      const startPixel = this.gridToPixel(startGridX, startGridY)
+      const endPixel = this.gridToPixel(endGridX, endGridY)
 
-      const pixelStartX = worldCenter.x + startX * gridSize
-      const pixelStartY = worldCenter.y - startY * gridSize
-      const pixelEndX = worldCenter.x + endX * gridSize
-      const pixelEndY = worldCenter.y - endY * gridSize
-
-      const dx = pixelEndX - pixelStartX
-      const dy = pixelEndY - pixelStartY
+      const dx = endPixel.x - startPixel.x
+      const dy = endPixel.y - startPixel.y
       const length = Math.sqrt(dx * dx + dy * dy)
       const angle = Math.atan2(dy, dx) * 180 / Math.PI
 
-      return {
-        left: `${pixelStartX}px`,
-        top: `${pixelStartY}px`,
+      const style = {
+        left: `${startPixel.x}px`,
+        top: `${startPixel.y}px`,
         width: `${length}px`,
-        height: '3px',
+        height: '8px',
         transform: `rotate(${angle}deg)`,
         transformOrigin: '0 50%'
       }
+
+      console.log(`🎨 网格激光样式:`, {
+        id: laser.id,
+        startGrid: [startGridX, startGridY],
+        endGrid: [endGridX, endGridY],
+        length: `${length.toFixed(1)}px`,
+        angle: `${angle.toFixed(1)}°`
+      })
+
+      return style
     },
     forceUpdate() {
       // 强制重新渲染，确保窗口大小变化时网格中心正确
       this.$forceUpdate()
+    },
+
+    // 显示调试信息
+    showDebugInfo() {
+      console.log('=== 🔍 调试信息 ===')
+      console.log(`机器人数量: ${this.machines.length}`)
+      console.log(`障碍物数量: ${this.obstacles.length}`)
+      console.log(`当前激光视野区域: ${this.laserVisionAreas.length}`)
+      console.log('障碍物位置:', this.obstacles.map(o => `${o.obstacle_id}: (${o.position[0]}, ${o.position[1]})`))
+      console.log('机器人位置:', this.machines.map(m => `${m.machine_id}: (${m.position[0]}, ${m.position[1]})`))
+      if (this.laserVisionAreas.length > 0) {
+        console.log('激光视野中心:', this.laserVisionAreas.map(v => `(${v.center[0].toFixed(1)}, ${v.center[1].toFixed(1)})`))
+      }
+
+      // 激光系统状态
+      console.log('\n=== 🧪 激光系统状态 ===')
+      console.log(`活跃激光数量: ${this.activeLasers.length}`)
+      console.log(`激光视野区域: ${this.laserVisionAreas.length}`)
+      if (this.activeLasers.length > 0) {
+        this.activeLasers.forEach(laser => {
+          console.log(`激光${laser.id}: 起点(${laser.startPos[0]},${laser.startPos[1]}) -> 终点(${laser.endPos[0]},${laser.endPos[1]})`)
+        })
+      }
+      console.log('===============')
+    },
+
+    // 切换网格显示
+    toggleGridOverlay() {
+      this.showGrid = !this.showGrid
+      console.log(`🔲 网格辅助线: ${this.showGrid ? '开启' : '关闭'}`)
     }
   }
 }
@@ -439,19 +617,46 @@ export default {
 .laser-beam {
   position: absolute;
   background: linear-gradient(90deg,
-    rgba(255, 0, 0, 0.9) 0%,
-    rgba(255, 100, 100, 0.8) 50%,
-    rgba(255, 0, 0, 0) 100%);
-  box-shadow: 0 0 10px #ff0000, 0 0 20px #ff0000;
+    rgba(255, 50, 50, 0.9) 0%,
+    rgba(255, 150, 150, 1) 20%,
+    rgba(255, 200, 200, 1) 50%,
+    rgba(255, 150, 150, 1) 80%,
+    rgba(255, 50, 50, 0.2) 100%);
+  box-shadow:
+    0 0 15px rgba(255, 0, 0, 0.8),
+    0 0 30px rgba(255, 0, 0, 0.6),
+    inset 0 0 5px rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
   z-index: 5;
-  animation: laser-pulse 3s ease-out;
+  animation: laser-flash 0.5s ease-out;
 }
 
-@keyframes laser-pulse {
-  0% { opacity: 0; transform: scaleX(0); }
-  10% { opacity: 1; transform: scaleX(1); }
-  90% { opacity: 1; transform: scaleX(1); }
-  100% { opacity: 0; transform: scaleX(1); }
+@keyframes laser-flash {
+  0% {
+    opacity: 0;
+    transform: scaleX(0) scaleY(0.3);
+    filter: brightness(2) blur(2px);
+  }
+  15% {
+    opacity: 1;
+    transform: scaleX(0.3) scaleY(1);
+    filter: brightness(3) blur(1px);
+  }
+  30% {
+    opacity: 1;
+    transform: scaleX(1) scaleY(1.2);
+    filter: brightness(2.5) blur(0px);
+  }
+  70% {
+    opacity: 1;
+    transform: scaleX(1) scaleY(1);
+    filter: brightness(1.5) blur(0px);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(1) scaleY(0.8);
+    filter: brightness(1) blur(1px);
+  }
 }
 
 .obstacle {
@@ -507,6 +712,21 @@ export default {
   text-align: center;
 }
 
-
+/* 网格辅助线样式 */
+.grid-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+  background-size: 30px 30px;
+  background-position:
+    calc(50% - 15px) calc(50% - 15px);
+  z-index: 0;
+}
 </style>
 

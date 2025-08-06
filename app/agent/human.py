@@ -68,19 +68,28 @@ class HumanAgent(MCPAgent):
 
     async def initialize(self, **kwargs) -> None:
         """
-        直接初始化流程 - 连接到现有的MCP服务器并创建机器人
+        直接初始化流程 - 连接到MCP服务器并创建机器人
         """
-        # 如果没有提供连接参数，连接到现有的MCP服务器
-        if not kwargs:
-            # 连接到现有的MCP服务器，而不是启动新的
-            # 使用HTTP连接连接到已经运行的MCP服务器
-            kwargs = {
-                "connection_type": "http_api",
-                "server_url": "http://localhost:8003"
-            }
+        connection_type = kwargs.get("connection_type", "http_api")
 
-        # 初始化MCP连接
-        await super().initialize(**kwargs)
+        if connection_type == "internal":
+            # 内部连接模式 - 直接使用服务器实例
+            server_instance = kwargs.get("server_instance")
+            if server_instance:
+                self.mcp_clients = {"internal": server_instance}
+                self.available_tools = list(server_instance.tools.keys())
+                logger.info(f"Human Commander {self.human_id} 使用内部连接模式")
+            else:
+                raise ValueError("Internal connection requires server_instance")
+        else:
+            # 外部连接模式
+            if not kwargs or connection_type == "http_api":
+                kwargs = {
+                    "connection_type": "http_api",
+                    "server_url": "http://localhost:8003"
+                }
+            # 初始化MCP连接
+            await super().initialize(**kwargs)
 
         # 直接创建并添加机器人
         await self.create_machines()
@@ -183,6 +192,21 @@ class HumanAgent(MCPAgent):
             return {"status": "success", "data": data}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    async def call_tool(self, tool_name: str, **kwargs) -> Any:
+        """重写call_tool方法以支持内部连接模式"""
+        if "internal" in self.mcp_clients:
+            # 内部连接模式 - 直接调用服务器方法
+            server_instance = self.mcp_clients["internal"]
+            try:
+                result = await server_instance.server.call_tool(tool_name, kwargs)
+                return result
+            except Exception as e:
+                logger.error(f"Error calling tool '{tool_name}' internally: {e}")
+                raise
+        else:
+            # 外部连接模式 - 使用父类方法
+            return await super().call_tool(tool_name, **kwargs)
 
     async def get_all_machines(self) -> dict:
         """获取所有机器人状态"""
