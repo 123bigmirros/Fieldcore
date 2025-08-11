@@ -3,9 +3,7 @@ Global world manager for tracking machine positions and world state.
 """
 
 import asyncio
-import json
-import os
-import tempfile
+import random
 from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from threading import Lock
@@ -133,43 +131,30 @@ class WorldManager:
             self.world_dimensions: int = 3  # Default to 3D world
             self.world_bounds: Tuple[float, float] = (-100.0, 100.0)  # Min, Max for each dimension
 
-            # Use temporary files for cross-process sharing
-            self.shared_file = os.path.join(tempfile.gettempdir(), "openmanus_world_state.json")
-            self.obstacles_file = os.path.join(tempfile.gettempdir(), "openmanus_obstacles.json")
+            # 使用内存存储替代文件存储
+            self._machines: Dict[str, dict] = {}
+            self._obstacles: Dict[str, dict] = {}
 
-            # Initialize with empty world if files don't exist
-            if not os.path.exists(self.shared_file):
-                self._save_world_state({})
-            if not os.path.exists(self.obstacles_file):
-                self._save_obstacles_state({})
+            # 初始化障碍物环境
+            self._initialize_obstacle_environment()
 
             self.initialized = True
 
     def _load_world_state(self) -> Dict[str, dict]:
-        """Load world state from shared file."""
-        try:
-            with open(self.shared_file, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+        """获取机器人世界状态（从内存）."""
+        return self._machines.copy()
 
     def _save_world_state(self, machines: Dict[str, dict]):
-        """Save world state to shared file."""
-        with open(self.shared_file, 'w') as f:
-            json.dump(machines, f, indent=2)
+        """保存机器人世界状态（到内存）."""
+        self._machines = machines.copy()
 
     def _load_obstacles_state(self) -> Dict[str, dict]:
-        """Load obstacles state from shared file."""
-        try:
-            with open(self.obstacles_file, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+        """获取障碍物状态（从内存）."""
+        return self._obstacles.copy()
 
     def _save_obstacles_state(self, obstacles: Dict[str, dict]):
-        """Save obstacles state to shared file."""
-        with open(self.obstacles_file, 'w') as f:
-            json.dump(obstacles, f, indent=2)
+        """保存障碍物状态（到内存）."""
+        self._obstacles = obstacles.copy()
 
     def register_machine(self, machine_id: str, position: Position,
                         life_value: int = 10, machine_type: str = "generic", size: float = 1.0,
@@ -292,6 +277,18 @@ class WorldManager:
 
         # Update position
         machines[machine_id]['position'] = list(new_position.coordinates)
+        self._save_world_state(machines)
+        return True
+
+    def update_machine_direction(self, machine_id: str, facing_direction: Tuple[float, float]) -> bool:
+        """Update a machine's facing direction."""
+        machines = self._load_world_state()
+
+        if machine_id not in machines:
+            return False
+
+        # Update facing direction
+        machines[machine_id]['facing_direction'] = list(facing_direction)
         self._save_world_state(machines)
         return True
 
@@ -468,6 +465,74 @@ class WorldManager:
                 result.append(obstacle)
 
         return result
+
+    def _initialize_obstacle_environment(self):
+        """初始化障碍物环境：外围正方形 + 内部随机障碍物"""
+        # 清理现有障碍物
+        self._obstacles.clear()
+
+        # 创建外围正方形障碍物 (边长约30单位，无间隙)
+        wall_size = 15
+        wall_thickness = 1.5  # 增加障碍物厚度，确保无法穿越
+
+        obstacles = []
+
+        # 上边墙 - 连续无间隙
+        for i in range(-wall_size, wall_size + 1, 1):
+            obstacles.append(("wall_top_" + str(i), [i, wall_size, 0], wall_thickness))
+
+        # 下边墙 - 连续无间隙
+        for i in range(-wall_size, wall_size + 1, 1):
+            obstacles.append(("wall_bottom_" + str(i), [i, -wall_size, 0], wall_thickness))
+
+        # 左边墙 - 连续无间隙，完全覆盖角落
+        for i in range(-wall_size, wall_size + 1, 1):
+            obstacles.append(("wall_left_" + str(i), [-wall_size, i, 0], wall_thickness))
+
+        # 右边墙 - 连续无间隙，完全覆盖角落
+        for i in range(-wall_size, wall_size + 1, 1):
+            obstacles.append(("wall_right_" + str(i), [wall_size, i, 0], wall_thickness))
+
+        # 在内部添加随机障碍物
+        random.seed(42)  # 固定随机种子，确保可重现
+        inner_obstacles = []
+        for i in range(20):  # 添加20个随机障碍物
+            while True:
+                x = random.randint(-wall_size + 3, wall_size - 3)
+                y = random.randint(-wall_size + 3, wall_size - 3)
+
+                # 确保不在原点附近（为机器人创建留出空间）
+                if abs(x) > 3 or abs(y) > 3:
+                    inner_obstacles.append((f"inner_obstacle_{i}", [x, y, 0], wall_thickness))
+                    break
+
+        obstacles.extend(inner_obstacles)
+
+        # 创建所有障碍物
+        created_count = 0
+        for obstacle_id, position, size in obstacles:
+            obstacle = Obstacle(
+                obstacle_id=obstacle_id,
+                position=Position(*position),
+                size=size,
+                obstacle_type="static"
+            )
+            self._obstacles[obstacle_id] = obstacle.to_dict()
+            created_count += 1
+
+        print(f"✅ 成功创建了 {created_count} 个障碍物")
+
+    def clear_all_data(self):
+        """清除所有数据（机器人和障碍物）"""
+        self._machines.clear()
+        self._obstacles.clear()
+        print("🧹 已清除所有世界数据")
+
+    def reinitialize_environment(self):
+        """重新初始化环境"""
+        self.clear_all_data()
+        self._initialize_obstacle_environment()
+        print("🔄 环境已重新初始化")
 
 
 # Global instance

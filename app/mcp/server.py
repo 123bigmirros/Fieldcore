@@ -20,8 +20,9 @@ from mcp.server.fastmcp import FastMCP
 from app.logger import logger
 from app.tool.base import BaseTool
 from app.tool.human_tools import ControlMachineTool, GetMachineStatusTool, PlanTaskTool
-from app.tool.machine_tools import CheckEnvironmentTool, MovementTool, StepMovementTool, LaserAttackTool
+from app.tool.machine_tools import CheckEnvironmentTool, StepMovementTool, LaserAttackTool, GetSelfStatusTool
 from app.agent.world_manager import WorldManager, Position
+from app.agent.machine import MachineAgent
 
 
 class CommandStatus(Enum):
@@ -63,9 +64,13 @@ class MCPServer:
         self.command_history: Dict[str, MachineCommand] = {}  # command_id -> command
         logger.info("MCPServer: Command queue initialized")
 
+        # Initialize Machine Agent registry
+        self.machine_agents: Dict[str, MachineAgent] = {}  # machine_id -> MachineAgent实例
+        logger.info("MCPServer: Machine Agent registry initialized")
+
         # Initialize human tools (只有Human Agent可以使用)
         self.human_tools = {
-            "control_machine": ControlMachineTool(),
+            "control_machine": ControlMachineTool(mcp_server=self),
             "get_machine_status": GetMachineStatusTool(),
             "plan_task": PlanTaskTool()
         }
@@ -73,9 +78,9 @@ class MCPServer:
         # Initialize machine tools (只有Machine Agent可以使用)
         self.machine_tools = {
             "check_environment": CheckEnvironmentTool(),
-            "movement": MovementTool(),
             "step_movement": StepMovementTool(),
-            "laser_attack": LaserAttackTool()
+            "laser_attack": LaserAttackTool(),
+            "get_self_status": GetSelfStatusTool()
         }
 
         # 将工具添加到主工具字典中，但标记其类型
@@ -88,6 +93,132 @@ class MCPServer:
             tool.agent_type = "machine"  # 标记为Machine工具
 
         # World state management tools are registered directly in register_all_tools()
+
+    async def _create_machine_agent(self, machine_id: str) -> MachineAgent:
+        """创建新的Machine Agent实例"""
+        try:
+            # 从世界管理器获取机器人信息
+            machine_info = self.world_manager.get_machine_info(machine_id)
+            if not machine_info:
+                raise ValueError(f"Machine {machine_id} not found in world registry")
+
+            # 创建Machine Agent实例
+            machine_agent = MachineAgent(
+                machine_id=machine_id,
+                location=machine_info.position,
+                life_value=machine_info.life_value,
+                machine_type=machine_info.machine_type,
+                size=machine_info.size
+            )
+
+            # 设置朝向
+            machine_agent.facing_direction = machine_info.facing_direction
+
+            # 设置内部连接模式 - 直接设置属性而不调用initialize
+            from app.tool.mcp import MCPClients
+            machine_tools = MCPClients()
+
+            # 添加machine专用工具
+            for name, tool in self.machine_tools.items():
+                machine_tools.tool_map[name] = tool
+
+            # 设置连接和工具，标记为内部模式
+            machine_agent.mcp_clients = machine_tools
+            machine_agent.available_tools = machine_tools
+            machine_agent._internal_server = self  # 保存服务器引用用于内部调用
+            machine_agent.initialized = True
+
+            logger.info(f"✅ Created Machine Agent {machine_id} in MCP server")
+            return machine_agent
+
+        except Exception as e:
+            logger.error(f"❌ Failed to create Machine Agent {machine_id}: {e}")
+            raise
+
+    async def call_tool(self, tool_name: str, kwargs: dict) -> Any:
+        """内部工具调用方法，供Machine Agent使用"""
+        try:
+            # 找到对应的工具
+            if tool_name.startswith("mcp_python_"):
+                # 去掉前缀
+                actual_tool_name = tool_name[11:]  # 移除 "mcp_python_"
+            else:
+                actual_tool_name = tool_name
+
+            # 在已注册的工具中查找
+            if actual_tool_name in self.tools:
+                tool = self.tools[actual_tool_name]
+                result = await tool.execute(**kwargs)
+                return result
+            else:
+                # 查找直接注册的world工具
+                world_tools = {
+                    "register_machine": "register_machine",
+                    "get_machine_info": "get_machine_info",
+                    "get_all_machines": "get_all_machines",
+                    "update_machine_position": "update_machine_position",
+                    "update_machine_life": "update_machine_life",
+                    "update_machine_action": "update_machine_action",
+                    "remove_machine": "remove_machine",
+                    "check_collision": "check_collision"
+                }
+
+                if actual_tool_name in world_tools:
+                    # 这些工具是直接在服务器中定义的，需要特殊处理
+                    return await self._call_world_tool(actual_tool_name, kwargs)
+                else:
+                    raise ValueError(f"Tool {tool_name} not found")
+
+        except Exception as e:
+            logger.error(f"Error calling tool '{tool_name}': {e}")
+            raise
+
+    async def _call_world_tool(self, tool_name: str, kwargs: dict) -> Any:
+        """调用世界管理工具"""
+        try:
+            if tool_name == "get_machine_info":
+                info = self.world_manager.get_machine_info(kwargs["machine_id"])
+                if info:
+                    from app.tool.base import ToolResult
+                    result_data = {
+                        "machine_id": info.machine_id,
+                        "position": list(info.position.coordinates),
+                        "life_value": info.life_value,
+                        "machine_type": info.machine_type,
+                        "status": info.status,
+                        "last_action": info.last_action,
+                        "size": info.size,
+                        "facing_direction": list(info.facing_direction)
+                    }
+                    return ToolResult(output=json.dumps(result_data))
+                else:
+                    return ToolResult(error=f"Machine {kwargs['machine_id']} not found")
+
+            elif tool_name == "update_machine_position":
+                pos = Position(*kwargs["new_position"])
+                success, collision_details = self.world_manager.update_machine_position_with_details(kwargs["machine_id"], pos)
+                from app.tool.base import ToolResult
+                if success:
+                    return ToolResult(output=f"Machine {kwargs['machine_id']} position updated to {pos}")
+                else:
+                    details = "; ".join(collision_details) if collision_details else "Unknown collision"
+                    return ToolResult(error=f"Movement blocked: {details}")
+
+            elif tool_name == "update_machine_action":
+                success = self.world_manager.update_machine_action(kwargs["machine_id"], kwargs["action"])
+                from app.tool.base import ToolResult
+                if success:
+                    return ToolResult(output=f"Machine {kwargs['machine_id']} action updated: {kwargs['action']}")
+                else:
+                    return ToolResult(error=f"Failed to update action for machine {kwargs['machine_id']}")
+
+            # 其他工具可以根据需要添加
+            else:
+                raise ValueError(f"World tool {tool_name} not implemented")
+
+        except Exception as e:
+            logger.error(f"Error calling world tool '{tool_name}': {e}")
+            raise
 
     def register_tool(self, tool: BaseTool, method_name: Optional[str] = None) -> None:
         """Register a tool with parameter validation and documentation."""
@@ -227,6 +358,31 @@ class MCPServer:
                 return f"Machine {machine_id} registered successfully at position {pos} with size {size}"
             except Exception as e:
                 return f"Error registering machine {machine_id}: {str(e)}"
+
+        # Register machine control (create Machine Agent in MCP server)
+        @self.server.tool()
+        async def register_machine_control(machine_id: str, callback_url: str = "") -> str:
+            """Register a machine for control by creating Machine Agent in MCP server."""
+            try:
+                # 检查机器人是否存在于世界中
+                machine_info = self.world_manager.get_machine_info(machine_id)
+                if not machine_info:
+                    return f"Error: Machine {machine_id} not found in world registry"
+
+                # 如果Machine Agent不存在，创建它
+                if machine_id not in self.machine_agents:
+                    machine_agent = await self._create_machine_agent(machine_id)
+                    self.machine_agents[machine_id] = machine_agent
+                    logger.info(f"✅ Machine Agent {machine_id} created and registered")
+                    return f"Machine {machine_id} control registered successfully (Agent created)"
+                else:
+                    logger.info(f"✅ Machine Agent {machine_id} already exists")
+                    return f"Machine {machine_id} control already registered"
+
+            except Exception as e:
+                error_msg = f"Error registering machine control: {str(e)}"
+                logger.error(error_msg)
+                return error_msg
 
         # Get machine info tool
         @self.server.tool()

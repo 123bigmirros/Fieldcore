@@ -131,13 +131,18 @@ class MachineAgent(MCPAgent):
     async def register_machine(self) -> None:
         """直接注册机器人到MCP服务器"""
         try:
+            # 确保机器人有朝向信息
+            if not hasattr(self, 'facing_direction'):
+                self.facing_direction = (1.0, 0.0)  # 默认朝向东
+
             result = await self.call_tool(
                 "mcp_python_register_machine",
                 machine_id=self.machine_id,
                 position=list(self.location.coordinates),
                 life_value=self.life_value,
                 machine_type=self.machine_type,
-                size=self.size
+                size=self.size,
+                facing_direction=list(self.facing_direction)
             )
             logger.info(f"📡 Machine {self.machine_id} 注册结果: {result}")
         except Exception as e:
@@ -167,10 +172,24 @@ class MachineAgent(MCPAgent):
         except Exception as e:
             logger.warning(f"❌ 移除机器人 {self.machine_id} 失败: {e}")
 
+    async def think(self) -> bool:
+        """重写think方法以支持内部连接模式"""
+        if hasattr(self, '_internal_server'):
+            # 内部连接模式 - 跳过MCP连接检查，直接使用ToolCallAgent的think
+            from app.agent.toolcall import ToolCallAgent
+            return await ToolCallAgent.think(self)
+        else:
+            # 外部连接模式 - 使用父类方法
+            return await super().think()
+
     async def cleanup(self, *args, **kwargs):
-        """清理机器人资源 - 空实现，避免自动删除机器人"""
-        # 不做任何实际清理，避免自动删除机器人
-        pass
+        """清理机器人资源 - 内部连接模式不需要清理MCP连接"""
+        if hasattr(self, '_internal_server'):
+            # 内部连接模式，不需要断开连接
+            logger.info(f"Machine {self.machine_id} cleanup completed (internal mode)")
+        else:
+            # 外部连接模式，调用父类清理
+            await super().cleanup(*args, **kwargs)
 
     def _should_finish_execution(self, name: str, **kwargs) -> bool:
         """确定工具执行是否应该结束agent"""
@@ -329,11 +348,23 @@ class MachineAgent(MCPAgent):
             logger.info(f"🤖 Machine {self.machine_id} 执行命令: {command_type}")
 
             if command_type == "move_to":
-                # 直接移动命令
+                # 移动命令（使用step_movement实现安全移动）
                 position = parameters.get("position", [0, 0, 0])
-                await self.call_tool("mcp_python_movement",
-                                   machine_id=self.machine_id,
-                                   coordinates=position)
+                # 计算从当前位置到目标位置的方向和距离
+                current_pos = self.location.coordinates
+                direction = [
+                    position[0] - current_pos[0],
+                    position[1] - current_pos[1],
+                    (position[2] if len(position) > 2 else 0.0) - (current_pos[2] if len(current_pos) > 2 else 0.0)
+                ]
+                distance = (direction[0]**2 + direction[1]**2 + direction[2]**2) ** 0.5
+                if distance > 0:
+                    await self.call_tool("mcp_python_step_movement",
+                                       machine_id=self.machine_id,
+                                       direction=direction,
+                                       distance=distance)
+                else:
+                    logger.info(f"Machine {self.machine_id} already at target position")
 
             elif command_type == "step_move":
                 # 逐步移动命令
@@ -488,7 +519,7 @@ class MachineAgent(MCPAgent):
             return f"未知命令类型: {command_type}"
 
     async def handle_move_to_command(self, parameters: Dict[str, Any]) -> str:
-        """处理移动命令"""
+        """处理移动命令，使用安全的step_movement"""
         try:
             position = parameters.get("position", [])
             if len(position) >= 2:
@@ -505,19 +536,32 @@ class MachineAgent(MCPAgent):
                     )
                 ))
 
-                # 使用MCP工具更新位置
-                result = await self.call_tool(
-                    "mcp_python_update_machine_position",
-                    machine_id=self.machine_id,
-                    new_position=[x, y, z]
-                )
+                # 计算移动方向和距离
+                current_pos = self.location.coordinates
+                direction = [
+                    x - current_pos[0],
+                    y - current_pos[1],
+                    z - (current_pos[2] if len(current_pos) > 2 else 0.0)
+                ]
+                distance = (direction[0]**2 + direction[1]**2 + direction[2]**2) ** 0.5
 
-                # 更新本地位置
-                self.location = Position(x, y, z)
-                self.last_action = f"move_to({x}, {y}, {z})"
+                if distance > 0:
+                    # 使用安全的step_movement
+                    result = await self.call_tool(
+                        "mcp_python_step_movement",
+                        machine_id=self.machine_id,
+                        direction=direction,
+                        distance=distance
+                    )
 
-                await self.update_status()
-                return f"Machine {self.machine_id} 已移动到 ({x}, {y}, {z})"
+                    # 更新本地位置（step_movement会自动更新世界位置）
+                    self.location = Position(x, y, z)
+                    self.last_action = f"move_to({x}, {y}, {z})"
+
+                    await self.update_status()
+                    return f"Machine {self.machine_id} 已安全移动到 ({x}, {y}, {z})"
+                else:
+                    return f"Machine {self.machine_id} 已在目标位置"
             else:
                 return "无效的位置参数"
 
@@ -577,6 +621,26 @@ class MachineAgent(MCPAgent):
 
         except Exception as e:
             return f"激光攻击失败: {str(e)}"
+
+    async def call_tool(self, tool_name: str, **kwargs) -> Any:
+        """重写call_tool方法以支持内部连接模式"""
+        if hasattr(self, '_internal_server'):
+            # 内部连接模式 - 直接调用服务器方法
+            server_instance = self._internal_server
+            try:
+                # 去掉mcp_python_前缀，因为内部调用不需要
+                actual_tool_name = tool_name
+                if tool_name.startswith("mcp_python_"):
+                    actual_tool_name = tool_name[11:]  # 移除"mcp_python_"前缀
+
+                result = await server_instance.call_tool(actual_tool_name, kwargs)
+                return result
+            except Exception as e:
+                logger.error(f"Error calling tool '{tool_name}' internally: {e}")
+                raise
+        else:
+            # 外部连接模式 - 使用父类方法
+            return await super().call_tool(tool_name, **kwargs)
 
     async def update_status(self) -> None:
         """更新机器人状态"""

@@ -94,45 +94,148 @@ class HumanAgent(MCPAgent):
         # 直接创建并添加机器人
         await self.create_machines()
 
-        logger.info(f"✅ Human Commander {self.human_id} 初始化完成，拥有 {len(self.machines)} 个机器人")
+        logger.info(f"✅ Human Commander {self.human_id} 初始化完成，机器人由MCP服务器管理")
 
     async def create_machines(self) -> None:
-        """直接创建机器人Agent"""
+        """在MCP服务器中注册机器人，不再在Human Agent本地创建Machine Agent实例"""
         try:
-            # 导入MachineAgent
-            from app.agent.machine import MachineAgent
             from app.agent.world_manager import Position
+            import random
+
+            # 如果machine_count为0，则不创建机器人
+            if self.machine_count == 0:
+                logger.info("🤖 Human Agent 不创建本地机器人，机器人将由MCP服务器管理")
+                return
+
+            # 寻找安全位置来放置机器人
+            safe_positions = await self._find_safe_positions(self.machine_count)
+
+            if len(safe_positions) < self.machine_count:
+                logger.warning(f"⚠️  只找到 {len(safe_positions)} 个安全位置，但需要 {self.machine_count} 个位置")
 
             for i in range(self.machine_count):
                 machine_id = f"robot_{i+1:02d}"
 
-                # 创建机器人Agent实例（不使用自动判断变量）
-                machine = MachineAgent(
+                # 为每个机器人分配不同的位置
+                if i < len(safe_positions):
+                    position = Position(*safe_positions[i])
+                else:
+                    # 如果安全位置不够，使用随机位置
+                    position = Position(
+                        random.uniform(-5.0, 5.0),
+                        random.uniform(-5.0, 5.0),
+                        0.0
+                    )
+                    logger.warning(f"⚠️  机器人 {machine_id} 使用随机位置: {position}")
+
+                # 为每个机器人设置4个基本方向之一（上下左右）
+                directions = [
+                    (1.0, 0.0),   # 右 (东)
+                    (0.0, 1.0),   # 上 (北)
+                    (-1.0, 0.0),  # 左 (西)
+                    (0.0, -1.0)   # 下 (南)
+                ]
+                facing_direction = directions[i % 4]  # 循环分配4个方向
+
+                # 只在世界中注册机器人，不创建本地Agent实例
+                result = await self.call_tool(
+                    "mcp_python_register_machine",
                     machine_id=machine_id,
-                    location=Position(0.0, 0.0, 0.0),
+                    position=list(position.coordinates),
                     life_value=10,
                     machine_type="worker",
-                    size=1.0,  # 默认机器人大小
-                    agent_type="machine"  # 为Machine Agent设置正确的agent_type
+                    size=1.0,
+                    facing_direction=list(facing_direction)
                 )
 
-                # 共享Human Agent的MCP连接，但通过agent_type控制工具访问权限
-                machine.mcp_clients = self.mcp_clients
-                machine.available_tools = self.available_tools
-
-                # 直接注册机器人（不需要重新初始化MCP连接）
-                await machine.register_machine()
-
-                # 启动Machine Agent的命令监听器
-                await machine.start_command_listener()
-
-                # 添加到管理列表
-                self.machines[machine_id] = machine
-
-                logger.info(f"  🤖 创建并注册机器人: {machine_id}")
+                logger.info(f"  🤖 在世界中注册机器人: {machine_id} 在位置 {position}")
 
         except Exception as e:
             logger.error(f"创建机器人失败: {e}")
+
+    async def _find_safe_positions(self, count: int) -> List[List[float]]:
+        """找到安全的机器人初始位置"""
+        safe_positions = []
+        attempts = 0
+        max_attempts = 50
+
+        # 定义搜索范围
+        search_range = 3
+
+        while len(safe_positions) < count and attempts < max_attempts:
+            attempts += 1
+
+            # 在原点附近搜索安全位置
+            import random
+            x = random.randint(-search_range, search_range)
+            y = random.randint(-search_range, search_range)
+            z = 0
+
+            # 检查这个位置是否已被占用
+            position_taken = False
+            for existing_pos in safe_positions:
+                if abs(existing_pos[0] - x) < 1.0 and abs(existing_pos[1] - y) < 1.0:
+                    position_taken = True
+                    break
+
+            if position_taken:
+                continue
+
+            # 检查这个位置是否与世界中的对象碰撞
+            try:
+                collision_result = await self.call_tool(
+                    "mcp_python_check_collision",
+                    position=[x, y, z],
+                    size=1.0
+                )
+
+                if hasattr(collision_result, 'output'):
+                    collision_data = collision_result.output
+                else:
+                    collision_data = str(collision_result)
+
+                # 解析碰撞结果
+                import json
+                try:
+                    collision_info = json.loads(collision_data)
+                    if not collision_info.get("collision", True):
+                        safe_positions.append([x, y, z])
+                        logger.info(f"找到安全位置: ({x}, {y}, {z})")
+                except:
+                    # 如果解析失败，假设位置安全
+                    safe_positions.append([x, y, z])
+                    logger.info(f"找到位置（解析失败，假设安全）: ({x}, {y}, {z})")
+
+            except Exception as e:
+                logger.warning(f"检查位置 ({x}, {y}, {z}) 失败: {e}")
+                # 继续尝试其他位置
+
+        logger.info(f"找到 {len(safe_positions)} 个安全位置（目标: {count}）")
+        return safe_positions
+
+    async def _register_machines_to_control_tool(self):
+        """将创建的机器人注册到control_machine工具中"""
+        try:
+            # 查找control_machine工具
+            control_tool = None
+            if hasattr(self, 'available_tools') and 'control_machine' in self.available_tools:
+                control_tool = self.available_tools['control_machine']
+            elif hasattr(self, 'mcp_clients'):
+                # 在MCP客户端中查找
+                for client in self.mcp_clients.values():
+                    if hasattr(client, 'available_tools') and 'control_machine' in client.available_tools:
+                        control_tool = client.available_tools['control_machine']
+                        break
+
+            if control_tool and hasattr(control_tool, 'register_machine_agent'):
+                for machine_id, machine in self.machines.items():
+                    control_tool.register_machine_agent(machine_id, machine)
+                    logger.info(f"  📡 已注册机器人 {machine_id} 到control_machine工具")
+            else:
+                logger.warning("未找到control_machine工具或不支持机器人注册")
+
+        except Exception as e:
+            logger.warning(f"注册机器人到control_machine工具失败: {e}")
 
     async def send_command_to_machine(self, machine_id: str, command_type: str, parameters: dict = None) -> dict:
         """向机器人发送命令"""
@@ -246,7 +349,7 @@ class HumanAgent(MCPAgent):
                 await self.analyze_task(request)
 
             # 构建当前状态信息
-            status_info = f"当前拥有 {len(self.machines)} 个机器人: {', '.join(self.machines.keys())}"
+            status_info = "机器人由MCP服务器管理"
             active_commands_info = f"活动命令数: {len(self.active_commands)}"
 
             # 添加状态消息
@@ -272,43 +375,29 @@ class HumanAgent(MCPAgent):
             return f"Human Commander {self.human_id} 遇到错误: {str(e)}"
 
     async def update_machine_cache(self) -> None:
-        """更新机器人信息缓存"""
-        for machine_id in list(self.machines.keys()):
-            try:
-                result = await self.call_tool("mcp_python_get_machine_info", machine_id=machine_id)
-                # 从ToolResult中提取output
-                result_str = result.output if hasattr(result, 'output') and result.output else str(result)
+        """更新机器人信息缓存（从MCP服务器获取所有机器人）"""
+        try:
+            # 获取所有机器人信息
+            result = await self.call_tool("mcp_python_get_all_machines")
+            result_str = result.output if hasattr(result, 'output') and result.output else str(result)
 
-                if result and "not found" not in result_str.lower():
-                    try:
-                        machine_data = json.loads(result_str)
-                        self.machine_info_cache[machine_id] = machine_data
-                    except json.JSONDecodeError:
-                        pass
-                else:
-                    # 机器人不存在，从管理列表移除
-                    if machine_id in self.machines:
-                        del self.machines[machine_id]
-                    if machine_id in self.machine_info_cache:
-                        del self.machine_info_cache[machine_id]
-
-            except Exception as e:
-                logger.warning(f"更新机器人 {machine_id} 信息失败: {e}")
+            if result and "error" not in result_str.lower():
+                try:
+                    all_machines = json.loads(result_str)
+                    self.machine_info_cache = all_machines
+                    logger.info(f"✅ 更新了 {len(all_machines)} 个机器人的信息缓存")
+                except json.JSONDecodeError:
+                    logger.warning("无法解析机器人信息")
+            else:
+                logger.warning("无法获取机器人信息")
+        except Exception as e:
+            logger.warning(f"更新机器人信息缓存失败: {e}")
 
     async def recycle_all_machines(self) -> None:
         """
-        停止所有机器人的命令监听器，并从世界中移除所有机器人
+        回收机器人（现在机器人由MCP服务器管理，这里只是一个占位符）
         """
-        for machine in self.machines.values():
-            try:
-                await machine.stop_command_listener()
-            except Exception as e:
-                logger.warning(f"停止机器人 {machine.machine_id} 监听器失败: {e}")
-            try:
-                await machine.remove_from_world()
-            except Exception as e:
-                logger.warning(f"移除机器人 {machine.machine_id} 失败: {e}")
-        logger.info(f"♻️ Human Commander {self.human_id} 已手动回收所有机器人")
+        logger.info(f"♻️ Human Commander {self.human_id} 清理完成（机器人由MCP服务器管理）")
 
     async def cleanup(self, *args, **kwargs):
         """清理资源 - 空实现，避免自动删除机器人"""

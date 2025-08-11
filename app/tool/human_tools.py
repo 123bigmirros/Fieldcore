@@ -30,10 +30,12 @@ class ControlMachineTool(BaseTool):
         "required": ["machine_id", "command"],
     }
 
-    def __init__(self, machine_registry: Optional[Dict[str, Any]] = None):
+    def __init__(self, machine_registry: Optional[Dict[str, Any]] = None, mcp_server: Optional[Any] = None):
         super().__init__()
-        # Registry of machine agents that can be controlled
+        # Registry of machine agents that can be controlled (deprecated)
         object.__setattr__(self, '_machine_registry', machine_registry or {})
+        # MCP server reference for direct Machine Agent access
+        object.__setattr__(self, '_mcp_server', mcp_server)
 
     @property
     def machine_registry(self) -> Dict[str, Any]:
@@ -69,15 +71,8 @@ class ControlMachineTool(BaseTool):
                     error=f"Machine {machine_id} is not active (status: {machine_info.status})"
                 )
 
-            # Check if we have a registered agent for this machine
-            registry = getattr(self, '_machine_registry', {})
-            if machine_id in registry:
-                # Direct agent control
-                machine_agent = registry[machine_id]
-                result = await self._control_via_agent(machine_agent, command)
-            else:
-                # Simulated control - interpret common commands
-                result = await self._simulate_control(machine_id, command)
+            # 直接解析命令并调用相应的工具 - 不使用Machine Agent
+            result = await self._direct_control(machine_id, command)
 
             return ToolResult(output=result)
 
@@ -97,6 +92,119 @@ class ControlMachineTool(BaseTool):
 
         except Exception as e:
             return f"Machine control error: {str(e)}"
+
+    async def _control_via_callback(self, machine_id: str, command: str, callback_url: str) -> str:
+        """Control machine via HTTP callback."""
+        try:
+            import requests
+            response = requests.post(callback_url, json={"machine_id": machine_id, "command": command}, timeout=10)
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("result", "Command executed via callback")
+            else:
+                return f"Callback failed with status {response.status_code}"
+        except Exception as e:
+            return f"Callback error: {str(e)}"
+
+    async def _direct_control(self, machine_id: str, command: str) -> str:
+        """直接控制机器人：解析命令并调用相应的MCP工具"""
+        command_lower = command.lower().strip()
+
+        # 获取MCP服务器引用以调用工具
+        mcp_server = getattr(self, '_mcp_server', None)
+
+        # 解析移动命令
+        if "移动" in command or "move" in command_lower:
+            return await self._handle_movement_command(machine_id, command, mcp_server)
+        elif "攻击" in command or "attack" in command_lower:
+            return await self._handle_attack_command(machine_id, command, mcp_server)
+        elif "检查" in command or "check" in command_lower:
+            return await self._handle_check_command(machine_id, command, mcp_server)
+        else:
+            # 对于其他命令，尝试智能解析
+            return f"Machine {machine_id} received command: {command} (暂不支持此类命令)"
+
+    async def _handle_movement_command(self, machine_id: str, command: str, mcp_server) -> str:
+        """处理移动命令"""
+        try:
+            # 解析方向和距离
+            import re
+
+            # 解析中文方向命令，如 "向下移动3个单位"
+            direction_map = {
+                "上": [0, 1, 0],
+                "下": [0, -1, 0],
+                "左": [-1, 0, 0],
+                "右": [1, 0, 0],
+                "东": [1, 0, 0],
+                "西": [-1, 0, 0],
+                "南": [0, -1, 0],
+                "北": [0, 1, 0]
+            }
+
+            direction = None
+            distance = 1
+
+            # 查找方向
+            for dir_text, dir_vector in direction_map.items():
+                if dir_text in command:
+                    direction = dir_vector
+                    break
+
+            # 查找距离
+            distance_match = re.search(r'(\d+)', command)
+            if distance_match:
+                distance = float(distance_match.group(1))
+
+            if direction is None:
+                return f"无法解析移动方向，命令: {command}"
+
+            # 调用step_movement工具
+            if mcp_server:
+                result = await mcp_server.call_tool("step_movement", {
+                    "machine_id": machine_id,
+                    "direction": direction,
+                    "distance": distance
+                })
+
+                # 解析结果
+                if hasattr(result, 'output') and result.output:
+                    return f"移动完成: {result.output}"
+                elif hasattr(result, 'error') and result.error:
+                    return f"移动失败: {result.error}"
+                else:
+                    return f"移动命令已发送: {str(result)}"
+            else:
+                # 如果没有MCP服务器引用，回退到模拟
+                return await self._simulate_movement(machine_id, command)
+
+        except Exception as e:
+            return f"移动命令处理失败: {str(e)}"
+
+    async def _handle_attack_command(self, machine_id: str, command: str, mcp_server) -> str:
+        """处理攻击命令"""
+        # 暂时简化实现
+        return f"Machine {machine_id} 攻击命令: {command} (攻击功能开发中)"
+
+    async def _handle_check_command(self, machine_id: str, command: str, mcp_server) -> str:
+        """处理检查环境命令"""
+        try:
+            if mcp_server:
+                result = await mcp_server.call_tool("check_environment", {
+                    "machine_id": machine_id,
+                    "radius": 3.0
+                })
+
+                if hasattr(result, 'output') and result.output:
+                    return f"环境检查结果: {result.output}"
+                elif hasattr(result, 'error') and result.error:
+                    return f"环境检查失败: {result.error}"
+                else:
+                    return f"环境检查完成: {str(result)}"
+            else:
+                return f"Machine {machine_id} 检查周围环境 (模拟模式)"
+        except Exception as e:
+            return f"环境检查失败: {str(e)}"
 
     async def _simulate_control(self, machine_id: str, command: str) -> str:
         """Simulate machine control by interpreting common commands."""

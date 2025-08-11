@@ -1,56 +1,113 @@
 <template>
   <div id="app">
-    <div class="visualization">
-      <div class="world-container">
-        <div class="world-grid">
-          <!-- 障碍物 -->
-          <div
-            v-for="obstacle in obstacles"
-            :key="obstacle.obstacle_id"
-            class="obstacle"
-            :style="getObstacleStyle(obstacle)"
-            :title="obstacle.obstacle_id"
-            v-show="isObstacleVisible(obstacle)"
-          >
-          </div>
-          <!-- 机器人 -->
-          <div
-            v-for="machine in machines"
-            :key="machine.machine_id"
-            class="machine"
-            :style="getMachineStyle(machine)"
-            :title="machine.machine_id"
-            v-show="isMachineVisible(machine)"
-          >
-            <div class="machine-id">{{ getMachineDisplayName(machine.machine_id) }}</div>
-            <div class="machine-life">{{ machine.life_value }}</div>
-            <!-- 机器人朝向指示器 -->
-            <div class="machine-direction" :style="getDirectionStyle(machine)"></div>
-          </div>
-          <!-- 激光特效 -->
-          <div
-            v-for="laser in activeLasers"
-            :key="'laser-' + laser.id"
-            class="laser-beam"
-            :style="getLaserStyle(laser)"
-            :title="`激光 ${laser.id}`"
-          ></div>
-
-          <!-- 网格辅助线 -->
-          <div v-if="showGrid" class="grid-overlay"></div>
-
+    <!-- 登录界面 -->
+    <div v-if="!humanId" class="login-container">
+      <div class="login-box">
+        <h2>🤖 OpenManus 智能管理系统</h2>
+        <div class="login-form">
+          <input
+            v-model="inputHumanId"
+            type="text"
+            placeholder="请输入Human ID"
+            @keyup.enter="createHuman"
+            class="human-id-input"
+          />
+          <input
+            v-model="machineCount"
+            type="number"
+            placeholder="机器人数量"
+            min="1"
+            max="10"
+            class="machine-count-input"
+          />
+          <button @click="createHuman" :disabled="!inputHumanId || isCreating" class="create-button">
+            {{ isCreating ? '创建中...' : '创建Human' }}
+          </button>
+          <div v-if="loginError" class="error-message">{{ loginError }}</div>
         </div>
       </div>
     </div>
-    <!-- 状态信息 -->
-    <div class="status-panel">
-      <div class="status-item">
-        <span class="status-label">机器人:</span>
-        <span class="status-value">{{ machines.length }}</span>
+
+    <!-- 主界面 -->
+    <div v-else class="main-interface">
+      <div class="visualization">
+        <div class="world-container">
+          <div class="world-grid">
+            <!-- 障碍物 -->
+            <div
+              v-for="obstacle in obstacles"
+              :key="obstacle.obstacle_id"
+              class="obstacle"
+              :style="getObstacleStyle(obstacle)"
+              :title="obstacle.obstacle_id"
+              v-show="isObstacleVisible(obstacle)"
+            >
+            </div>
+            <!-- 机器人 -->
+            <div
+              v-for="machine in machines"
+              :key="machine.machine_id"
+              class="machine"
+              :style="getMachineStyle(machine)"
+              :title="machine.machine_id"
+              v-show="isMachineVisible(machine)"
+            >
+              <!-- 机器人前端指示器 -->
+              <div class="machine-front" :style="getFrontStyle(machine)"></div>
+              <div class="machine-id">{{ getMachineDisplayName(machine.machine_id) }}</div>
+            </div>
+            <!-- 激光特效 -->
+            <div
+              v-for="laser in activeLasers"
+              :key="'laser-' + laser.id"
+              class="laser-beam"
+              :style="getLaserStyle(laser)"
+              :title="`激光 ${laser.id}`"
+            ></div>
+
+            <!-- 网格辅助线 -->
+            <div v-if="showGrid" class="grid-overlay"></div>
+
+          </div>
+        </div>
       </div>
-      <div class="status-item">
-        <span class="status-label">障碍物:</span>
-        <span class="status-value">{{ obstacles.length }}</span>
+
+      <!-- 状态信息 -->
+      <div class="status-panel">
+        <div class="status-item">
+          <span class="status-label">Human ID:</span>
+          <span class="status-value">{{ humanId }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">机器人:</span>
+          <span class="status-value">{{ machines.length }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">障碍物:</span>
+          <span class="status-value">{{ obstacles.length }}</span>
+        </div>
+        <button @click="exitSystem" class="exit-button">退出系统</button>
+      </div>
+
+      <!-- 指令输入框 -->
+      <div v-if="showCommandInput" class="command-input-overlay">
+        <div class="command-input-box">
+          <h3>🎯 发送指令</h3>
+          <textarea
+            v-model="currentCommand"
+            placeholder="请输入指令..."
+            @keyup.enter.ctrl="sendCommand"
+            class="command-textarea"
+            ref="commandTextarea"
+          ></textarea>
+          <div class="command-buttons">
+            <button @click="sendCommand" :disabled="!currentCommand.trim() || isSendingCommand" class="send-button">
+              {{ isSendingCommand ? '发送中...' : '发送 (Ctrl+Enter)' }}
+            </button>
+            <button @click="closeCommandInput" class="cancel-button">取消</button>
+          </div>
+          <div v-if="commandError" class="error-message">{{ commandError }}</div>
+        </div>
       </div>
     </div>
   </div>
@@ -62,22 +119,43 @@ export default {
   name: 'App',
   data() {
     return {
+      // 原始数据
       machines: [],
       obstacles: [],
       refreshInterval: null,
       activeLasers: [], // 活跃的激光特效
       laserVisionAreas: [], // 激光路径的临时视野区域
       shownAttacks: [], // 已经显示过的攻击，避免重复
-      showGrid: false // 是否显示网格辅助线
+      showGrid: false, // 是否显示网格辅助线
+
+      // Human管理相关
+      humanId: null, // 当前登录的human ID
+      inputHumanId: '', // 输入框中的human ID
+      machineCount: 3, // 机器人数量
+      isCreating: false, // 是否正在创建Human
+      loginError: '', // 登录错误信息
+
+      // 指令相关
+      showCommandInput: false, // 是否显示指令输入框
+      currentCommand: '', // 当前指令
+      isSendingCommand: false, // 是否正在发送指令
+      commandError: '', // 指令错误信息
+      spaceKeyCount: 0, // 空格键计数
+      spaceKeyTimer: null // 空格键定时器
     }
   },
   mounted() {
-    this.startAutoRefresh()
+    // 只有登录后才开始刷新数据
+    if (this.humanId) {
+      this.startAutoRefresh()
+    }
+
     // 监听窗口大小变化，确保网格中心正确
     window.addEventListener('resize', this.forceUpdate)
 
-    // 添加键盘调试快捷键
+    // 添加键盘快捷键
     window.addEventListener('keydown', (e) => {
+      // 调试快捷键
       if (e.key === 'd' && e.ctrlKey) {
         e.preventDefault()
         this.showDebugInfo()
@@ -86,6 +164,11 @@ export default {
         e.preventDefault()
         this.toggleGridOverlay()
       }
+
+      // 双击空格显示指令输入框
+      if (e.key === ' ' && this.humanId && !this.showCommandInput) {
+        this.handleSpaceKey()
+      }
     })
   },
   beforeUnmount() {
@@ -93,6 +176,131 @@ export default {
     window.removeEventListener('resize', this.forceUpdate)
   },
   methods: {
+    // =============  Human管理方法 =============
+    async createHuman() {
+      if (!this.inputHumanId.trim()) {
+        this.loginError = 'Human ID不能为空'
+        return
+      }
+
+      this.isCreating = true
+      this.loginError = ''
+
+      try {
+        const response = await axios.post('http://localhost:8004/api/humans', {
+          human_id: this.inputHumanId.trim(),
+          machine_count: this.machineCount
+        })
+
+        if (response.data.status === 'success') {
+          this.humanId = this.inputHumanId.trim()
+          this.inputHumanId = ''
+
+          // 登录成功后开始刷新数据
+          this.startAutoRefresh()
+
+          console.log(`✅ Human ${this.humanId} 创建成功，机器人数量: ${response.data.machine_count}`)
+        }
+      } catch (error) {
+        console.error('创建Human失败:', error)
+        this.loginError = error.response?.data?.error || '创建失败，请重试'
+      } finally {
+        this.isCreating = false
+      }
+    },
+
+    async exitSystem() {
+      if (!this.humanId) return
+
+      try {
+        await axios.delete(`http://localhost:8004/api/humans/${this.humanId}`)
+        console.log(`✅ Human ${this.humanId} 已删除`)
+
+        // 停止刷新数据
+        this.stopAutoRefresh()
+
+        // 重置状态
+        this.humanId = null
+        this.machines = []
+        this.obstacles = []
+        this.activeLasers = []
+        this.laserVisionAreas = []
+        this.shownAttacks = []
+
+      } catch (error) {
+        console.error('删除Human失败:', error)
+        // 即使删除失败也要退出界面
+        this.humanId = null
+      }
+    },
+
+    // ============= 指令相关方法 =============
+    handleSpaceKey() {
+      this.spaceKeyCount++
+
+      // 清除之前的定时器
+      if (this.spaceKeyTimer) {
+        clearTimeout(this.spaceKeyTimer)
+      }
+
+      // 500ms内双击空格
+      this.spaceKeyTimer = setTimeout(() => {
+        if (this.spaceKeyCount >= 2) {
+          this.openCommandInput()
+        }
+        this.spaceKeyCount = 0
+      }, 500)
+    },
+
+    openCommandInput() {
+      this.showCommandInput = true
+      this.currentCommand = ''
+      this.commandError = ''
+
+      // 下一帧后聚焦到文本框
+      this.$nextTick(() => {
+        if (this.$refs.commandTextarea) {
+          this.$refs.commandTextarea.focus()
+        }
+      })
+    },
+
+    closeCommandInput() {
+      this.showCommandInput = false
+      this.currentCommand = ''
+      this.commandError = ''
+    },
+
+    async sendCommand() {
+      if (!this.currentCommand.trim() || !this.humanId) {
+        return
+      }
+
+      this.isSendingCommand = true
+      this.commandError = ''
+
+      // 发送命令后立即关闭窗口，不等待响应
+      const commandToSend = this.currentCommand.trim()
+      this.closeCommandInput()
+
+      try {
+        const response = await axios.post(`http://localhost:8004/api/humans/${this.humanId}/command`, {
+          command: commandToSend
+        })
+
+        if (response.data.status === 'success') {
+          console.log(`📡 指令已发送: ${commandToSend}`)
+        }
+      } catch (error) {
+        console.error('发送指令失败:', error)
+        // 由于窗口已关闭，这里只能在控制台输出错误信息
+        console.error('指令发送失败，请重试')
+      } finally {
+        this.isSendingCommand = false
+      }
+    },
+
+    // ============= 原始刷新数据方法 =============
     async refreshData() {
       // 获取机器人数据
       try {
@@ -427,13 +635,43 @@ export default {
         console.log(`🔄 激光视野已移除 (${beforeCount - this.laserVisionAreas.length}个区域)`)
       }, 3000)
     },
-    // 获取机器人朝向指示器样式
-    getDirectionStyle(machine) {
-      const [dx, dy] = machine.facing_direction
-      const angle = Math.atan2(dy, dx) * 180 / Math.PI
-      return {
-        transform: `rotate(${angle}deg)`
+        // 获取机器人前端指示器样式
+    getFrontStyle(machine) {
+      const [dx, dy] = machine.facing_direction || [1, 0]
+
+      // 将方向向量转换为4个基本方向
+      let direction = 'right' // 默认向右
+      if (Math.abs(dx) > Math.abs(dy)) {
+        direction = dx > 0 ? 'right' : 'left'
+      } else {
+        direction = dy > 0 ? 'up' : 'down'
       }
+
+      // 根据方向设置前端指示器位置和形状
+      const styles = {
+        'right': {
+          right: '-2px', top: '25%',
+          width: '8px', height: '50%',
+          borderRadius: '0 4px 4px 0'
+        },
+        'left': {
+          left: '-2px', top: '25%',
+          width: '8px', height: '50%',
+          borderRadius: '4px 0 0 4px'
+        },
+        'up': {
+          top: '-2px', left: '25%',
+          width: '50%', height: '8px',
+          borderRadius: '4px 4px 0 0'
+        },
+        'down': {
+          bottom: '-2px', left: '25%',
+          width: '50%', height: '8px',
+          borderRadius: '0 0 4px 4px'
+        }
+      }
+
+      return styles[direction] || styles['right']
     },
     // 获取激光特效样式（基于网格坐标）
     getLaserStyle(laser) {
@@ -568,50 +806,35 @@ export default {
   transform: scale(1.1) rotate(1deg);
 }
 .machine-id {
-  width: 100%;
-  text-align: center;
-  font-size: 0.8rem;
-  font-family: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-shadow: 0 1px 4px #0984e355, 0 0 2px #fff;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 0 2px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 2px;
-}
-
-.machine-life {
-  position: absolute;
-  bottom: -2px;
-  right: -2px;
-  background: rgba(255, 0, 0, 0.8);
-  color: white;
-  font-size: 0.7rem;
-  font-weight: bold;
-  padding: 1px 4px;
-  border-radius: 3px;
-  min-width: 12px;
-  text-align: center;
-}
-
-.machine-direction {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 0;
-  height: 0;
-  border-left: 8px solid #fff;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  transform-origin: 0 50%;
-  margin-left: 6px;
-  margin-top: -2px;
+  transform: translate(-50%, -50%);
+  font-size: 1rem;
+  font-family: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.8),
+    0 0 8px rgba(255, 255, 255, 0.6),
+    0 0 12px rgba(116, 185, 255, 0.4);
+  color: #fff;
+  white-space: nowrap;
+  z-index: 2;
+}
+
+
+
+/* 机器人前端指示器 */
+.machine-front {
+  position: absolute;
+  background: linear-gradient(135deg, #ffff00 0%, #ffd700 100%);
+  box-shadow:
+    0 0 8px rgba(255, 255, 0, 0.8),
+    0 0 12px rgba(255, 215, 0, 0.4),
+    inset 0 1px 2px rgba(255, 255, 255, 0.3);
+  z-index: 4;
+  pointer-events: none;
 }
 
 .laser-beam {
@@ -727,6 +950,203 @@ export default {
   background-position:
     calc(50% - 15px) calc(50% - 15px);
   z-index: 0;
+}
+
+/* =============== 登录界面样式 =============== */
+.login-container {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.login-box {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 16px;
+  padding: 40px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(20px);
+  text-align: center;
+  min-width: 400px;
+}
+
+.login-box h2 {
+  margin-bottom: 30px;
+  color: #2d3436;
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.human-id-input, .machine-count-input {
+  padding: 12px 16px;
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: border-color 0.3s ease;
+}
+
+.human-id-input:focus, .machine-count-input:focus {
+  outline: none;
+  border-color: #74b9ff;
+  box-shadow: 0 0 0 3px rgba(116, 185, 255, 0.1);
+}
+
+.create-button {
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.create-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(116, 185, 255, 0.4);
+}
+
+.create-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* =============== 主界面样式 =============== */
+.main-interface {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+.exit-button {
+  margin-top: 10px;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #fd79a8 0%, #e84393 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: 100%;
+}
+
+.exit-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(232, 67, 147, 0.4);
+}
+
+/* =============== 指令输入框样式 =============== */
+.command-input-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.command-input-box {
+  background: white;
+  border-radius: 12px;
+  padding: 30px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  min-width: 500px;
+  max-width: 80vw;
+}
+
+.command-input-box h3 {
+  margin: 0 0 20px 0;
+  color: #2d3436;
+  font-size: 1.4rem;
+  text-align: center;
+}
+
+.command-textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 12px;
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-family: inherit;
+  resize: vertical;
+  margin-bottom: 15px;
+}
+
+.command-textarea:focus {
+  outline: none;
+  border-color: #74b9ff;
+  box-shadow: 0 0 0 3px rgba(116, 185, 255, 0.1);
+}
+
+.command-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.send-button {
+  padding: 10px 20px;
+  background: linear-gradient(135deg, #00b894 0%, #00a085 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.send-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 184, 148, 0.4);
+}
+
+.send-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancel-button {
+  padding: 10px 20px;
+  background: #636e72;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.cancel-button:hover {
+  background: #2d3436;
+  transform: translateY(-1px);
+}
+
+/* =============== 错误信息样式 =============== */
+.error-message {
+  color: #d63031;
+  background: rgba(214, 48, 49, 0.1);
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(214, 48, 49, 0.2);
+  font-size: 0.9rem;
+  margin-top: 10px;
 }
 </style>
 

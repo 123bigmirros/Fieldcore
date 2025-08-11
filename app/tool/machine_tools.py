@@ -73,128 +73,12 @@ class CheckEnvironmentTool(BaseTool):
             return ToolResult(error=f"Environment check failed: {str(e)}")
 
 
-class MovementTool(BaseTool):
-    """Tool for controlling machine movement in multi-dimensional space."""
-
-    name: str = "movement"
-    description: str = "Move the machine to a new position in multi-dimensional space. Each move is limited to 1 unit (enforced externally)."
-    parameters: dict = {
-        "type": "object",
-        "properties": {
-            "machine_id": {
-                "type": "string",
-                "description": "The ID of the machine to move",
-            },
-            "coordinates": {
-                "type": "array",
-                "description": "Array of coordinates for the new position (e.g., [x, y, z])",
-                "items": {"type": "number"},
-            },
-            "relative": {
-                "type": "boolean",
-                "description": "Whether the coordinates are relative to current position (default: false)",
-                "default": False,
-            },
-        },
-        "required": ["machine_id", "coordinates"],
-    }
-
-    async def execute(self, machine_id: str, coordinates: List[float],
-                     relative: bool = False, step_by_step: bool = False, **kwargs) -> ToolResult:
-        """Execute movement with optional step-by-step collision checking."""
-        try:
-            machine_info = world_manager.get_machine_info(machine_id)
-            if not machine_info:
-                return ToolResult(error=f"Machine {machine_id} not found in world registry")
-            if machine_info.status != "active":
-                return ToolResult(error=f"Machine {machine_id} is not active (status: {machine_info.status})")
-
-            if relative:
-                target_coords = tuple(current + delta for current, delta in zip(machine_info.position.coordinates, coordinates))
-            else:
-                target_coords = tuple(coordinates)
-
-            target_position = Position(*target_coords)
-
-            if step_by_step:
-                # 逐步移动模式
-                return await self._step_by_step_movement(machine_id, machine_info.position, target_position)
-            else:
-                # 直接移动模式（原有逻辑）
-                success = world_manager.update_machine_position(machine_id, target_position)
-                if not success:
-                    return ToolResult(error=f"Movement failed. Position {target_position} may be blocked")
-                world_manager.update_machine_action(machine_id, f"moved_to_{target_position}")
-                return ToolResult(output=f"Machine {machine_id} moved to {target_position}")
-        except Exception as e:
-            return ToolResult(error=f"Movement failed: {str(e)}")
-
-    async def _step_by_step_movement(self, machine_id: str, start_pos: Position, target_pos: Position) -> ToolResult:
-        """逐步移动，每单位检查碰撞"""
-        current_pos = start_pos
-        steps_taken = 0
-
-        # 计算移动方向和总步数
-        dx = target_pos.coordinates[0] - start_pos.coordinates[0]
-        dy = target_pos.coordinates[1] - start_pos.coordinates[1]
-        dz = (target_pos.coordinates[2] if len(target_pos.coordinates) > 2 else 0.0) - (start_pos.coordinates[2] if len(start_pos.coordinates) > 2 else 0.0)
-
-                # 计算总移动距离，设置小步长确保前端能看到每一步
-        total_distance = (dx**2 + dy**2 + dz**2) ** 0.5
-        if total_distance == 0:
-            return ToolResult(output=f"Machine {machine_id} already at target position")
-
-        # 设置每步移动0.1单位，确保足够多的中间步骤
-        step_size = 0.1
-        total_steps = max(1, int(total_distance / step_size))
-
-        # 计算每步的增量
-        step_x = dx / total_steps if total_steps > 0 else 0
-        step_y = dy / total_steps if total_steps > 0 else 0
-        step_z = dz / total_steps if total_steps > 0 else 0
-
-                # 逐步移动（支持中断）
-        import asyncio
-        for step in range(1, int(total_steps) + 1):
-            # 检查是否被取消，延长等待时间确保前端能看到每一步
-            try:
-                await asyncio.sleep(0.6)  # 600ms每步，前端300ms刷新能看到2次更新
-            except asyncio.CancelledError:
-                world_manager.update_machine_action(machine_id, f"cancelled_at_{current_pos}")
-                return ToolResult(output=f"Machine {machine_id} movement cancelled at {current_pos} after {steps_taken} steps")
-
-            next_x = start_pos.coordinates[0] + step_x * step
-            next_y = start_pos.coordinates[1] + step_y * step
-            next_z = (start_pos.coordinates[2] if len(start_pos.coordinates) > 2 else 0.0) + step_z * step
-            next_pos = Position(next_x, next_y, next_z)
-
-            # 检查下一步是否会碰撞
-            if world_manager.check_collision(next_pos, exclude_machine_id=machine_id):
-                # 遇到障碍物，停止移动
-                collision_details = world_manager.find_collision_details(next_pos, exclude_machine_id=machine_id)
-                details_str = "; ".join(collision_details)
-                world_manager.update_machine_action(machine_id, f"stopped_at_{current_pos}_due_to_collision")
-                return ToolResult(output=f"Machine {machine_id} moved {steps_taken} steps to {current_pos}, stopped due to collision: {details_str}")
-
-            # 移动到下一位置
-            success = world_manager.update_machine_position(machine_id, next_pos)
-            if not success:
-                world_manager.update_machine_action(machine_id, f"stopped_at_{current_pos}_update_failed")
-                return ToolResult(error=f"Movement failed at step {step}. Position update failed for {next_pos}")
-
-            current_pos = next_pos
-            steps_taken = step
-
-        # 成功完成移动
-        world_manager.update_machine_action(machine_id, f"moved_to_{current_pos}")
-        return ToolResult(output=f"Machine {machine_id} successfully moved to {current_pos} in {steps_taken} steps")
-
 
 class StepMovementTool(BaseTool):
-    """Tool for step-by-step movement with collision checking."""
+    """Tool for step-by-step movement with collision checking and direction setting."""
 
     name: str = "step_movement"
-    description: str = "Move machine step-by-step towards target, stopping at obstacles."
+    description: str = "Move machine step-by-step towards target, stopping at obstacles. Supports four cardinal directions: East [1,0,0], North [0,1,0], West [-1,0,0], South [0,-1,0]. Set distance=0 to only change direction without moving."
     parameters: dict = {
         "type": "object",
         "properties": {
@@ -205,11 +89,11 @@ class StepMovementTool(BaseTool):
             "direction": {
                 "type": "array",
                 "items": {"type": "number"},
-                "description": "Direction vector [x, y, z] to move (e.g., [1, 0, 0] for east)",
+                "description": "Direction vector [x, y, z]. Cardinal directions: East [1,0,0], North [0,1,0], West [-1,0,0], South [0,-1,0]",
             },
             "distance": {
                 "type": "number",
-                "description": "Number of units to move in the direction",
+                "description": "Number of units to move in the direction. Use 0 to only change facing direction without moving.",
             },
         },
         "required": ["machine_id", "direction", "distance"],
@@ -231,6 +115,14 @@ class StepMovementTool(BaseTool):
 
             normalized_direction = [d / direction_length for d in direction]
 
+            # 更新机器人朝向（只使用x,y分量）
+            facing_direction = (normalized_direction[0], normalized_direction[1])
+            world_manager.update_machine_direction(machine_id, facing_direction)
+
+            # 如果距离为0，只更新方向不移动
+            if distance == 0:
+                return ToolResult(output=f"Machine {machine_id} direction updated to {facing_direction}")
+
             # 计算目标位置
             current_pos = machine_info.position
             target_x = current_pos.coordinates[0] + normalized_direction[0] * distance
@@ -240,11 +132,76 @@ class StepMovementTool(BaseTool):
             target_position = Position(target_x, target_y, target_z)
 
             # 使用逐步移动
-            movement_tool = MovementTool(name="movement", description="Movement tool")
-            return await movement_tool._step_by_step_movement(machine_id, current_pos, target_position)
+            result = await self._step_by_step_movement(machine_id, current_pos, target_position)
+
+            # 在移动结果中添加方向更新信息
+            if hasattr(result, 'output') and result.output:
+                result.output += f" Direction updated to {facing_direction}."
+
+            return result
 
         except Exception as e:
             return ToolResult(error=f"Step movement failed: {str(e)}")
+
+    async def _step_by_step_movement(self, machine_id: str, start_pos: Position, target_pos: Position) -> ToolResult:
+        """逐步移动，每单位检查碰撞"""
+        current_pos = start_pos
+        steps_taken = 0
+
+        # 计算移动方向和总步数
+        dx = target_pos.coordinates[0] - start_pos.coordinates[0]
+        dy = target_pos.coordinates[1] - start_pos.coordinates[1]
+        dz = (target_pos.coordinates[2] if len(target_pos.coordinates) > 2 else 0.0) - (start_pos.coordinates[2] if len(start_pos.coordinates) > 2 else 0.0)
+
+        # 计算总移动距离，使用1单位作为最小移动步长
+        total_distance = (dx**2 + dy**2 + dz**2) ** 0.5
+        if total_distance == 0:
+            return ToolResult(output=f"Machine {machine_id} already at target position")
+
+        # 每步移动1单位，确保移动单位为整数
+        step_size = 1.0
+        total_steps = max(1, int(total_distance / step_size))
+
+        # 计算每步的增量（保证每步移动1单位）
+        step_x = dx / total_steps if total_steps > 0 else 0
+        step_y = dy / total_steps if total_steps > 0 else 0
+        step_z = dz / total_steps if total_steps > 0 else 0
+
+        # 逐步移动（支持中断）
+        import asyncio
+        for step in range(1, int(total_steps) + 1):
+            # 通过睡眠控制移动速度，让前端能够看到移动过程
+            try:
+                await asyncio.sleep(0.8)  # 800ms每步，前端300ms刷新能看到移动过程
+            except asyncio.CancelledError:
+                world_manager.update_machine_action(machine_id, f"cancelled_at_{current_pos}")
+                return ToolResult(output=f"Machine {machine_id} movement cancelled at {current_pos} after {steps_taken} steps")
+
+            next_x = start_pos.coordinates[0] + step_x * step
+            next_y = start_pos.coordinates[1] + step_y * step
+            next_z = (start_pos.coordinates[2] if len(start_pos.coordinates) > 2 else 0.0) + step_z * step
+            next_pos = Position(next_x, next_y, next_z)
+
+            # 检查下一步是否会碰撞
+            if world_manager.check_collision(next_pos, exclude_machine_id=machine_id):
+                # 遇到障碍物，停止移动
+                collision_details = world_manager.find_collision_details(next_pos, exclude_machine_id=machine_id)
+                details_str = "; ".join(collision_details)
+                world_manager.update_machine_action(machine_id, f"stopped_at_{current_pos}_due_to_collision")
+                return ToolResult(output=f"Machine {machine_id} moved {steps_taken} units to {current_pos}, stopped due to collision: {details_str}")
+
+            # 移动到下一位置
+            success = world_manager.update_machine_position(machine_id, next_pos)
+            if not success:
+                world_manager.update_machine_action(machine_id, f"stopped_at_{current_pos}_update_failed")
+                return ToolResult(error=f"Movement failed at step {step}. Position update failed for {next_pos}")
+
+            current_pos = next_pos
+            steps_taken = step
+
+        # 成功完成移动
+        world_manager.update_machine_action(machine_id, f"moved_to_{current_pos}")
+        return ToolResult(output=f"Machine {machine_id} successfully moved to {current_pos} in {steps_taken} units")
 
 
 class MachineActionTool(BaseTool):
@@ -613,3 +570,43 @@ class MeleeAttackTool(MachineActionTool):
 
 # Note: To use MeleeAttackTool, add it to machine_tools in mcp/server.py
 # and handle the "melee_attack" command type in machine agent
+
+
+class GetSelfStatusTool(BaseTool):
+    """Tool for machine to get its own status information."""
+
+    name: str = "get_self_status"
+    description: str = "Get the machine's own current status including position, facing_direction (cardinal direction the machine is facing), life_value, etc. Use this to check current facing direction before moving."
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "machine_id": {
+                "type": "string",
+                "description": "The ID of the machine to get status for",
+            },
+        },
+        "required": ["machine_id"],
+    }
+
+    async def execute(self, machine_id: str, **kwargs) -> ToolResult:
+        """Get machine's own status information."""
+        try:
+            machine_info = world_manager.get_machine_info(machine_id)
+            if not machine_info:
+                return ToolResult(error=f"Machine {machine_id} not found in world registry")
+
+            status_data = {
+                "machine_id": machine_info.machine_id,
+                "position": list(machine_info.position.coordinates),
+                "facing_direction": list(machine_info.facing_direction),
+                "life_value": machine_info.life_value,
+                "machine_type": machine_info.machine_type,
+                "status": machine_info.status,
+                "last_action": machine_info.last_action,
+                "size": machine_info.size
+            }
+
+            return ToolResult(output=json.dumps(status_data, indent=2, ensure_ascii=False))
+
+        except Exception as e:
+            return ToolResult(error=f"Failed to get self status: {str(e)}")
