@@ -9,43 +9,57 @@ import asyncio
 import atexit
 import json
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
 from inspect import Parameter, Signature
 from typing import Any, Dict, List, Optional
+
+import redis
+from rq import Queue, Worker
 
 from mcp.server.fastmcp import FastMCP
 
 from app.logger import logger
 from app.tool.base import BaseTool
-from app.tool.human_tools import ControlMachineTool, GetMachineStatusTool, PlanTaskTool
+from app.tool.human_tools import ControlMachineTool
 from app.tool.machine_tools import CheckEnvironmentTool, StepMovementTool, LaserAttackTool, GetSelfStatusTool
 from app.agent.world_manager import WorldManager, Position
 from app.agent.machine import MachineAgent
 
 
-class CommandStatus(Enum):
-    """命令执行状态"""
-    PENDING = "pending"  # 等待执行
-    EXECUTING = "executing"  # 正在执行
-    COMPLETED = "completed"  # 执行完成
-    FAILED = "failed"  # 执行失败
-    CANCELLED = "cancelled"  # 被挤占取消
+# 全局MCP服务器实例引用，用于RQ任务
+_mcp_server_instance = None
 
+def execute_machine_command(machine_id: str, command: str):
+    """
+    RQ任务函数：执行机器人命令
+    """
+    import asyncio
+    from app.logger import logger
 
-@dataclass
-class MachineCommand:
-    """机器指令数据结构"""
-    command_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    machine_id: str = ""
-    command_type: str = ""  # move_to, perform_action, etc.
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    status: CommandStatus = CommandStatus.PENDING
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
-    result: Optional[str] = None
-    error: Optional[str] = None
+    try:
+        logger.info(f"🔄 RQ Worker executing command for machine {machine_id}: {command}")
+
+        if _mcp_server_instance is None:
+            raise RuntimeError("MCP Server instance not available")
+
+        # 检查机器人是否存在
+        if machine_id not in _mcp_server_instance.machine_agents:
+            raise ValueError(f"Machine {machine_id} not found in registry")
+
+        # 在新事件循环中执行异步任务
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            machine_agent = _mcp_server_instance.machine_agents[machine_id]
+            result = loop.run_until_complete(machine_agent.run(command))
+            logger.info(f"✅ RQ Worker completed command: {result}")
+            return result
+        finally:
+            loop.close()
+
+    except Exception as e:
+        logger.error(f"❌ RQ Worker command failed: {e}")
+        raise
 
 
 class MCPServer:
@@ -59,10 +73,10 @@ class MCPServer:
         self.world_manager = WorldManager()
         logger.info("MCPServer: WorldManager initialized")
 
-        # Initialize message queue for machine commands
-        self.command_queue: Dict[str, List[MachineCommand]] = {}  # machine_id -> commands
-        self.command_history: Dict[str, MachineCommand] = {}  # command_id -> command
-        logger.info("MCPServer: Command queue initialized")
+        # Initialize Redis connection and RQ queue
+        self.redis_conn = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+        self.task_queue = Queue('machine_commands', connection=self.redis_conn)
+        logger.info("MCPServer: Redis and RQ queue initialized")
 
         # Initialize Machine Agent registry
         self.machine_agents: Dict[str, MachineAgent] = {}  # machine_id -> MachineAgent实例
@@ -70,9 +84,7 @@ class MCPServer:
 
         # Initialize human tools (只有Human Agent可以使用)
         self.human_tools = {
-            "control_machine": ControlMachineTool(mcp_server=self),
-            "get_machine_status": GetMachineStatusTool(),
-            "plan_task": PlanTaskTool()
+            "control_machine": ControlMachineTool(mcp_server=self)
         }
 
         # Initialize machine tools (只有Machine Agent可以使用)
@@ -93,6 +105,10 @@ class MCPServer:
             tool.agent_type = "machine"  # 标记为Machine工具
 
         # World state management tools are registered directly in register_all_tools()
+
+        # 设置全局实例引用用于RQ任务
+        global _mcp_server_instance
+        _mcp_server_instance = self
 
     async def _create_machine_agent(self, machine_id: str) -> MachineAgent:
         """创建新的Machine Agent实例"""
@@ -171,6 +187,49 @@ class MCPServer:
 
         except Exception as e:
             logger.error(f"Error calling tool '{tool_name}': {e}")
+            raise
+
+    def enqueue_command(self, machine_id: str, command: str, wait: bool = False):
+        """
+        添加命令到RQ队列
+
+        Args:
+            machine_id: 机器人ID
+            command: 命令内容
+            wait: 是否等待任务完成
+
+        Returns:
+            如果wait=False，返回job_id
+            如果wait=True，返回执行结果
+        """
+        try:
+            # 检查机器人是否存在
+            machine_info = self.world_manager.get_machine_info(machine_id)
+            if not machine_info:
+                raise ValueError(f"Machine {machine_id} not found in world registry")
+
+            # 使用RQ排队任务
+            job = self.task_queue.enqueue(
+                execute_machine_command,
+                machine_id,
+                command,
+                job_timeout='5m'
+            )
+
+            logger.info(f"📥 Command {job.id} enqueued for machine {machine_id}: {command}")
+
+            if wait:
+                # 等待任务完成
+                logger.info(f"⏳ Waiting for command {job.id} to complete...")
+                result = job.result  # 这会阻塞直到任务完成
+                logger.info(f"✅ Command {job.id} completed with result: {result}")
+                return result
+            else:
+                # 不等待，返回job_id
+                return job.id
+
+        except Exception as e:
+            logger.error(f"❌ Failed to enqueue command for {machine_id}: {e}")
             raise
 
     async def _call_world_tool(self, tool_name: str, kwargs: dict) -> Any:
@@ -324,6 +383,12 @@ class MCPServer:
     async def cleanup(self) -> None:
         """Clean up server resources."""
         logger.info("Cleaning up resources")
+
+        # Close Redis connection
+        if self.redis_conn:
+            self.redis_conn.close()
+            logger.info("Redis connection closed")
+
         # Clean up control machine tool registry
         if "control_machine" in self.tools and hasattr(self.tools["control_machine"], "machine_registry"):
             self.tools["control_machine"].machine_registry.clear()
@@ -508,130 +573,15 @@ class MCPServer:
             except Exception as e:
                 return f"Error getting nearby machines: {str(e)}"
 
-        # Command queue management tools
-        @self.server.tool()
-        async def send_command_to_machine(machine_id: str, command_type: str, parameters: dict = None) -> str:
-            """Send a command to a specific machine. Returns command_id for tracking."""
-            try:
-                if parameters is None:
-                    parameters = {}
+        # 删除send_command_to_machine工具 - 不再使用命令队列
 
-                command = MachineCommand(
-                    machine_id=machine_id,
-                    command_type=command_type,
-                    parameters=parameters
-                )
+        # 删除get_machine_commands工具 - 不再使用命令队列
 
-                # Add to queue
-                if machine_id not in self.command_queue:
-                    self.command_queue[machine_id] = []
-                self.command_queue[machine_id].append(command)
+        # 删除update_command_status工具 - 不再使用命令队列
 
-                # Add to history
-                self.command_history[command.command_id] = command
+        # 删除wait_for_command_completion工具 - 不再使用命令队列
 
-                logger.info(f"Command {command.command_id} sent to machine {machine_id}: {command_type}")
-                return json.dumps({
-                    "command_id": command.command_id,
-                    "status": "sent",
-                    "message": f"Command sent to machine {machine_id}"
-                })
-            except Exception as e:
-                return f"Error sending command: {str(e)}"
-
-        @self.server.tool()
-        async def get_machine_commands(machine_id: str) -> str:
-            """Get pending commands for a specific machine."""
-            try:
-                if machine_id not in self.command_queue:
-                    return json.dumps([])
-
-                commands = []
-                for cmd in self.command_queue[machine_id]:
-                    # 返回所有未完成的命令（pending, executing）
-                    if cmd.status in [CommandStatus.PENDING, CommandStatus.EXECUTING]:
-                        commands.append({
-                            "command_id": cmd.command_id,
-                            "command_type": cmd.command_type,
-                            "parameters": cmd.parameters,
-                            "status": cmd.status.value,
-                            "created_at": cmd.created_at.isoformat()
-                        })
-
-                return json.dumps(commands)
-            except Exception as e:
-                return f"Error getting commands: {str(e)}"
-
-        @self.server.tool()
-        async def update_command_status(command_id: str, status: str, result: str = None, error: str = None) -> str:
-            """Update the status of a command."""
-            try:
-                if command_id not in self.command_history:
-                    return f"Error: Command {command_id} not found"
-
-                command = self.command_history[command_id]
-                command.status = CommandStatus(status)
-                command.updated_at = datetime.now()
-
-                if result:
-                    command.result = result
-                if error:
-                    command.error = error
-
-                logger.info(f"Command {command_id} status updated to {status}")
-                return f"Command {command_id} status updated to {status}"
-            except Exception as e:
-                return f"Error updating command status: {str(e)}"
-
-        @self.server.tool()
-        async def wait_for_command_completion(command_id: str, timeout: int = 30) -> str:
-            """Wait for a command to complete. Returns the final status and result."""
-            try:
-                if command_id not in self.command_history:
-                    return f"Error: Command {command_id} not found"
-
-                # Wait for completion with timeout
-                for _ in range(timeout):
-                    command = self.command_history[command_id]
-                    if command.status in [CommandStatus.COMPLETED, CommandStatus.FAILED]:
-                        return json.dumps({
-                            "command_id": command_id,
-                            "status": command.status.value,
-                            "result": command.result,
-                            "error": command.error,
-                            "completed_at": command.updated_at.isoformat()
-                        })
-                    await asyncio.sleep(1)
-
-                # Timeout
-                return json.dumps({
-                    "command_id": command_id,
-                    "status": "timeout",
-                    "error": f"Command did not complete within {timeout} seconds"
-                })
-            except Exception as e:
-                return f"Error waiting for command: {str(e)}"
-
-        @self.server.tool()
-        async def get_command_status(command_id: str) -> str:
-            """Get the current status of a command."""
-            try:
-                if command_id not in self.command_history:
-                    return f"Error: Command {command_id} not found"
-
-                command = self.command_history[command_id]
-                return json.dumps({
-                    "command_id": command_id,
-                    "machine_id": command.machine_id,
-                    "command_type": command.command_type,
-                    "status": command.status.value,
-                    "result": command.result,
-                    "error": command.error,
-                    "created_at": command.created_at.isoformat(),
-                    "updated_at": command.updated_at.isoformat()
-                })
-            except Exception as e:
-                return f"Error getting command status: {str(e)}"
+        # 删除get_command_status工具 - 不再使用命令队列
 
         # Obstacle management tools
         @self.server.tool()
@@ -725,7 +675,6 @@ class MCPServer:
                 return f"Error checking collision: {str(e)}"
 
         logger.info("MCPServer: All world state management tools registered")
-        logger.info("MCPServer: Command queue tools registered")
         logger.info("MCPServer: Obstacle management tools registered")
 
     def run(self, transport: str = "stdio", host: str = None, port: int = None) -> None:

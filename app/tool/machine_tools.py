@@ -498,78 +498,7 @@ class LaserAttackTool(MachineActionTool):
         return result
 
 
-# Example: Template for future attack tools
-class MeleeAttackTool(MachineActionTool):
-    """Template for close-range melee attacks. This is just an example."""
-
-    name: str = "melee_attack"
-    description: str = "Perform a melee attack on adjacent machines. Template for future attack implementations."
-    parameters: dict = {
-        "type": "object",
-        "properties": {
-            "machine_id": {
-                "type": "string",
-                "description": "The ID of the machine performing the melee attack",
-            },
-            "damage": {
-                "type": "number",
-                "description": "Damage points to inflict (default: 2)",
-                "default": 2,
-            },
-        },
-        "required": ["machine_id"],
-    }
-
-    async def _perform_action(self, machine_id: str, damage: int = 2, **kwargs) -> ToolResult:
-        """Example implementation of melee attack."""
-        try:
-            # Get attacker machine info (already validated by parent)
-            attacker = world_manager.get_machine_info(machine_id)
-
-            # Find adjacent machines (within 1.5 units)
-            nearby_machines = world_manager.get_nearby_machines(machine_id, 1.5, use_square_distance=True)
-
-            targets_hit = []
-
-            # Attack all adjacent machines
-            for target in nearby_machines:
-                if target.machine_id != machine_id and target.status == "active":
-                    # Apply damage
-                    success = world_manager.update_machine_life(target.machine_id, -damage)
-                    if success:
-                        target_info = world_manager.get_machine_info(target.machine_id)
-                        target_data = {
-                            "target_id": target.machine_id,
-                            "damage_dealt": damage,
-                            "remaining_life": target_info.life_value if target_info else 0,
-                            "destroyed": False
-                        }
-
-                        # Handle machine destruction
-                        destroyed = await self._handle_machine_destruction(target.machine_id)
-                        target_data["destroyed"] = destroyed
-
-                        targets_hit.append(target_data)
-
-            # Build attack result
-            attack_data = {
-                "attacker_id": machine_id,
-                "attacker_position": str(attacker.position),
-                "attack_type": "melee",
-                "targets_hit": targets_hit,
-                "total_targets": len(targets_hit)
-            }
-
-            # Set action description for parent class
-            self._last_action_description = f"melee_attack_damage_{damage}_targets_{len(targets_hit)}"
-
-            return ToolResult(output=json.dumps(attack_data, indent=2, ensure_ascii=False))
-
-        except Exception as e:
-            return ToolResult(error=f"Melee attack failed: {str(e)}")
-
-# Note: To use MeleeAttackTool, add it to machine_tools in mcp/server.py
-# and handle the "melee_attack" command type in machine agent
+# 删除MeleeAttackTool模板类 - 只是示例代码，未实际使用
 
 
 class GetSelfStatusTool(BaseTool):

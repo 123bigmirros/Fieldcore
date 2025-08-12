@@ -1,11 +1,14 @@
 # coding: utf-8
-# A shortcut to launch OpenManus MCP server, where its introduction also solves other import issues.
+# A shortcut to launch OpenManus MCP server with integrated RQ worker
 import asyncio
 import threading
 import time
 from flask import Flask, jsonify
 from flask_cors import CORS
+import redis
+from rq import Worker
 from app.mcp.server import MCPServer, parse_args
+from app.logger import logger
 
 
 def create_http_server(mcp_server):
@@ -270,6 +273,40 @@ def run_http_server(app, port=8001):
     thread.start()
     return thread
 
+def run_rq_worker():
+    """在后台线程中运行RQ Worker"""
+    def worker_main():
+        try:
+            # 连接Redis
+            redis_conn = redis.Redis(host='localhost', port=6379, db=0)
+            redis_conn.ping()
+            logger.info("🔗 RQ Worker connected to Redis")
+
+            # 创建Worker并开始工作 - 在子线程中运行需要特殊处理
+            import signal
+            # 暂时忽略信号处理器设置错误
+            original_signal = signal.signal
+            def dummy_signal(*args, **kwargs):
+                pass
+            signal.signal = dummy_signal
+
+            try:
+                worker = Worker(['machine_commands'], connection=redis_conn)
+                logger.info("🚀 RQ Worker started, listening on queue: machine_commands")
+                worker.work()
+            finally:
+                # 恢复原始signal函数
+                signal.signal = original_signal
+
+        except redis.ConnectionError:
+            logger.error("❌ RQ Worker: Cannot connect to Redis")
+        except Exception as e:
+            logger.error(f"❌ RQ Worker error: {e}")
+
+    thread = threading.Thread(target=worker_main, daemon=True)
+    thread.start()
+    return thread
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -280,13 +317,17 @@ if __name__ == "__main__":
     # 创建HTTP服务器
     http_app = create_http_server(server)
 
-    # 在后台启动HTTP服务器
+    # 在后台启动各个服务
     print("🚀 启动MCP服务器...")
     print("🌐 启动HTTP接口服务器...")
+    print("⚡ 启动RQ Worker...")
+
     http_thread = run_http_server(http_app, port=8003)
+    rq_thread = run_rq_worker()
 
     print("✅ MCP服务器启动成功")
     print("✅ HTTP接口服务器启动成功 (端口: 8003)")
+    print("✅ RQ Worker启动成功 (队列: machine_commands)")
     print("📡 MCP服务器地址: http://localhost:8004")
     print("🌐 HTTP接口地址: http://localhost:8003")
 
