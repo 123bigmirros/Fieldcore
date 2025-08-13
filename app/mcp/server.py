@@ -28,7 +28,7 @@ from app.agent.machine import MachineAgent
 # 全局MCP服务器实例引用，用于RQ任务
 _mcp_server_instance = None
 
-def execute_machine_command(machine_id: str, command: str):
+def execute_machine_command(machine_id: str, command: str, human_id: str = ""):
     """
     RQ任务函数：执行机器人命令
     """
@@ -36,13 +36,26 @@ def execute_machine_command(machine_id: str, command: str):
     from app.logger import logger
 
     try:
-        logger.info(f"🔄 RQ Worker executing command for machine {machine_id}: {command}")
+        logger.info(f"🔄 RQ Worker executing command for machine {machine_id} (owner: {human_id}): {command}")
 
         if _mcp_server_instance is None:
             raise RuntimeError("MCP Server instance not available")
 
-        # 检查机器人是否存在
-        if machine_id not in _mcp_server_instance.machine_agents:
+        # 在二维结构中查找机器人
+        machine_agent = None
+        if human_id and human_id in _mcp_server_instance.machine_agents:
+            if machine_id in _mcp_server_instance.machine_agents[human_id]:
+                machine_agent = _mcp_server_instance.machine_agents[human_id][machine_id]
+
+        # 如果没找到，尝试在所有human中查找（向后兼容）
+        if not machine_agent:
+            for hid, machines in _mcp_server_instance.machine_agents.items():
+                if machine_id in machines:
+                    machine_agent = machines[machine_id]
+                    logger.info(f"Found machine {machine_id} in human {hid}'s collection")
+                    break
+
+        if not machine_agent:
             raise ValueError(f"Machine {machine_id} not found in registry")
 
         # 在新事件循环中执行异步任务
@@ -50,7 +63,6 @@ def execute_machine_command(machine_id: str, command: str):
         asyncio.set_event_loop(loop)
 
         try:
-            machine_agent = _mcp_server_instance.machine_agents[machine_id]
             result = loop.run_until_complete(machine_agent.run(command))
             logger.info(f"✅ RQ Worker completed command: {result}")
             return result
@@ -74,13 +86,14 @@ class MCPServer:
         logger.info("MCPServer: WorldManager initialized")
 
         # Initialize Redis connection and RQ queue
-        self.redis_conn = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+        # 注意：RQ需要decode_responses=False来避免编码问题
+        self.redis_conn = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
         self.task_queue = Queue('machine_commands', connection=self.redis_conn)
         logger.info("MCPServer: Redis and RQ queue initialized")
 
-        # Initialize Machine Agent registry
-        self.machine_agents: Dict[str, MachineAgent] = {}  # machine_id -> MachineAgent实例
-        logger.info("MCPServer: Machine Agent registry initialized")
+        # Initialize Machine Agent registry - 二维结构：human_id -> {machine_id -> MachineAgent}
+        self.machine_agents: Dict[str, Dict[str, MachineAgent]] = {}  # human_id -> {machine_id -> MachineAgent实例}
+        logger.info("MCPServer: Machine Agent registry initialized with hierarchical structure")
 
         # Initialize human tools (只有Human Agent可以使用)
         self.human_tools = {
@@ -88,12 +101,18 @@ class MCPServer:
         }
 
         # Initialize machine tools (只有Machine Agent可以使用)
+        # 传递世界管理器实例给工具
         self.machine_tools = {
             "check_environment": CheckEnvironmentTool(),
             "step_movement": StepMovementTool(),
             "laser_attack": LaserAttackTool(),
             "get_self_status": GetSelfStatusTool()
         }
+
+        # 设置工具的世界管理器引用
+        for tool in self.machine_tools.values():
+            if hasattr(tool, 'set_world_manager'):
+                tool.set_world_manager(self.world_manager)
 
         # 将工具添加到主工具字典中，但标记其类型
         for name, tool in self.human_tools.items():
@@ -130,18 +149,12 @@ class MCPServer:
             # 设置朝向
             machine_agent.facing_direction = machine_info.facing_direction
 
-            # 设置内部连接模式 - 直接设置属性而不调用initialize
-            from app.tool.mcp import MCPClients
-            machine_tools = MCPClients()
-
-            # 添加machine专用工具
-            for name, tool in self.machine_tools.items():
-                machine_tools.tool_map[name] = tool
-
-            # 设置连接和工具，标记为内部模式
-            machine_agent.mcp_clients = machine_tools
-            machine_agent.available_tools = machine_tools
-            machine_agent._internal_server = self  # 保存服务器引用用于内部调用
+            # 对于RQ Worker中运行的Machine Agent，使用HTTP API连接到主服务器
+            # 这样可以确保使用主服务器的world_manager实例
+            await machine_agent.initialize(
+                connection_type="http_api",
+                server_url="http://localhost:8003"
+            )
             machine_agent.initialized = True
 
             logger.info(f"✅ Created Machine Agent {machine_id} in MCP server")
@@ -189,18 +202,19 @@ class MCPServer:
             logger.error(f"Error calling tool '{tool_name}': {e}")
             raise
 
-    def enqueue_command(self, machine_id: str, command: str, wait: bool = False):
+    def enqueue_command(self, machine_id: str, command: str, offline: bool = True, human_id: str = ""):
         """
         添加命令到RQ队列
 
         Args:
             machine_id: 机器人ID
             command: 命令内容
-            wait: 是否等待任务完成
+            offline: 是否离线执行（True=立即返回job_id，False=等待完成返回结果）
+            human_id: 机器人所有者ID
 
         Returns:
-            如果wait=False，返回job_id
-            如果wait=True，返回执行结果
+            如果offline=True，返回job_id
+            如果offline=False，返回执行结果
         """
         try:
             # 检查机器人是否存在
@@ -208,24 +222,44 @@ class MCPServer:
             if not machine_info:
                 raise ValueError(f"Machine {machine_id} not found in world registry")
 
-            # 使用RQ排队任务
+            # 使用RQ排队任务（传递human_id）
             job = self.task_queue.enqueue(
                 execute_machine_command,
                 machine_id,
                 command,
+                human_id,  # 传递human_id参数
                 job_timeout='5m'
             )
 
-            logger.info(f"📥 Command {job.id} enqueued for machine {machine_id}: {command}")
+            logger.info(f"📥 Command {job.id} enqueued for machine {machine_id} (owner: {human_id}): {command}")
 
-            if wait:
-                # 等待任务完成
+            if not offline:
+                # 在线模式：等待任务完成
                 logger.info(f"⏳ Waiting for command {job.id} to complete...")
-                result = job.result  # 这会阻塞直到任务完成
+
+                # 使用轮询方式等待任务完成 - 兼容不同RQ版本
+                import time
+                timeout = 300  # 5分钟超时
+                start_time = time.time()
+
+                while job.get_status() not in ['finished', 'failed', 'canceled']:
+                    if time.time() - start_time > timeout:
+                        logger.error(f"❌ Command {job.id} timed out after {timeout} seconds")
+                        raise TimeoutError(f"Job {job.id} timed out after {timeout} seconds")
+                    time.sleep(0.1)  # 每100ms检查一次
+
+                if job.get_status() == 'failed':
+                    logger.error(f"❌ Command {job.id} failed: {job.exc_info}")
+                    raise Exception(f"Job failed: {job.exc_info}")
+                elif job.get_status() == 'canceled':
+                    logger.error(f"❌ Command {job.id} was canceled")
+                    raise Exception(f"Job was canceled")
+
+                result = job.result
                 logger.info(f"✅ Command {job.id} completed with result: {result}")
                 return result
             else:
-                # 不等待，返回job_id
+                # 离线模式：不等待，返回job_id
                 return job.id
 
         except Exception as e:
@@ -426,7 +460,7 @@ class MCPServer:
 
         # Register machine control (create Machine Agent in MCP server)
         @self.server.tool()
-        async def register_machine_control(machine_id: str, callback_url: str = "") -> str:
+        async def register_machine_control(machine_id: str, callback_url: str = "", caller_id: str = "") -> str:
             """Register a machine for control by creating Machine Agent in MCP server."""
             try:
                 # 检查机器人是否存在于世界中
@@ -434,15 +468,23 @@ class MCPServer:
                 if not machine_info:
                     return f"Error: Machine {machine_id} not found in world registry"
 
+                # 确保有调用者ID
+                if not caller_id:
+                    return f"Error: caller_id is required for machine registration"
+
+                # 初始化human的机器人集合（如果不存在）
+                if caller_id not in self.machine_agents:
+                    self.machine_agents[caller_id] = {}
+
                 # 如果Machine Agent不存在，创建它
-                if machine_id not in self.machine_agents:
+                if machine_id not in self.machine_agents[caller_id]:
                     machine_agent = await self._create_machine_agent(machine_id)
-                    self.machine_agents[machine_id] = machine_agent
-                    logger.info(f"✅ Machine Agent {machine_id} created and registered")
-                    return f"Machine {machine_id} control registered successfully (Agent created)"
+                    self.machine_agents[caller_id][machine_id] = machine_agent
+                    logger.info(f"✅ Machine Agent {machine_id} created and registered for {caller_id}")
+                    return f"Machine {machine_id} control registered successfully for {caller_id} (Agent created)"
                 else:
-                    logger.info(f"✅ Machine Agent {machine_id} already exists")
-                    return f"Machine {machine_id} control already registered"
+                    logger.info(f"✅ Machine Agent {machine_id} already exists for {caller_id}")
+                    return f"Machine {machine_id} control already registered for {caller_id}"
 
             except Exception as e:
                 error_msg = f"Error registering machine control: {str(e)}"

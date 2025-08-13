@@ -12,11 +12,12 @@ import time
 
 @dataclass
 class Position:
-    """Represents a position in multi-dimensional space."""
+    """Represents a position in multi-dimensional space with integer coordinates."""
     coordinates: Tuple[float, ...]
 
     def __init__(self, *coords: float):
-        self.coordinates = tuple(coords)
+        # 强制使用整数坐标，但保存为float以保持类型一致性
+        self.coordinates = tuple(float(round(coord)) for coord in coords)
 
     def distance_to(self, other: "Position") -> float:
         """Calculate Euclidean distance to another position."""
@@ -80,6 +81,7 @@ class MachineInfo:
     position: Position
     life_value: int
     machine_type: str
+    owner: str = ""  # 机器人所有者 (human_id)
     status: str = "active"
     last_action: Optional[str] = None
     size: float = 1.0  # machine size (radius for collision detection)
@@ -92,6 +94,7 @@ class MachineInfo:
             'position': list(self.position.coordinates),
             'life_value': self.life_value,
             'machine_type': self.machine_type,
+            'owner': self.owner,
             'status': self.status,
             'last_action': self.last_action,
             'size': self.size,
@@ -106,6 +109,7 @@ class MachineInfo:
             position=Position(*data['position']),
             life_value=data['life_value'],
             machine_type=data['machine_type'],
+            owner=data.get('owner', ''),
             status=data.get('status', 'active'),
             last_action=data.get('last_action'),
             size=data.get('size', 1.0),
@@ -158,13 +162,14 @@ class WorldManager:
 
     def register_machine(self, machine_id: str, position: Position,
                         life_value: int = 10, machine_type: str = "generic", size: float = 1.0,
-                        facing_direction: Tuple[float, float] = (1.0, 0.0)) -> None:
+                        facing_direction: Tuple[float, float] = (1.0, 0.0), owner: str = "") -> None:
         """Register a new machine in the world."""
         machine_info = MachineInfo(
             machine_id=machine_id,
             position=position,
             life_value=life_value,
             machine_type=machine_type,
+            owner=owner,
             size=size,
             facing_direction=facing_direction
         )

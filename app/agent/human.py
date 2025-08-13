@@ -103,16 +103,18 @@ class HumanAgent(MCPAgent):
             for i in range(machine_count):
                 machine_id = f"robot_{i+1:02d}"
 
-                # 简单的位置分配：围绕原点分布
-                angle = (i * 2 * 3.14159) / machine_count
-                x = 2.0 * (angle / 3.14159)  # 简化的位置计算
-                y = 2.0 * ((i % 2) * 2 - 1)  # 交替上下
+                # 简单的位置分配：网格排列，确保整数坐标
+                # 按行排列，每行3个机器人
+                row = i // 3
+                col = i % 3
+                x = float(col - 1)  # -1, 0, 1
+                y = float(row)      # 0, 1, 2, ...
                 position = [x, y, 0.0]
 
                 # 基本朝向
                 facing_direction = [1.0, 0.0]
 
-                # 注册机器人到MCP服务器
+                # 注册机器人到MCP服务器（传递owner信息）
                 result = await self.call_tool(
                     "mcp_python_register_machine",
                     machine_id=machine_id,
@@ -120,7 +122,8 @@ class HumanAgent(MCPAgent):
                     life_value=10,
                     machine_type="worker",
                     size=1.0,
-                    facing_direction=facing_direction
+                    facing_direction=facing_direction,
+                    owner=self.human_id
                 )
 
                 logger.info(f"  ✅ 创建机器人: {machine_id} 在位置 {position}")
@@ -148,7 +151,11 @@ class HumanAgent(MCPAgent):
             return {"status": "error", "message": str(e)}
 
     async def call_tool(self, tool_name: str, **kwargs) -> Any:
+        kwargs["caller_id"] = self.human_id
         """重写call_tool方法以支持内部连接模式"""
+        # 添加调试日志
+        from app.logger import logger
+        logger.info(f"🎯 Human Agent {self.human_id} calling tool '{tool_name}' with caller_id='{kwargs.get('caller_id', 'NOT_SET')}')")
         if "internal" in self.mcp_clients:
             # 内部连接模式 - 直接调用服务器方法
             server_instance = self.mcp_clients["internal"]

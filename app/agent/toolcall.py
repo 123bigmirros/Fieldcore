@@ -177,8 +177,16 @@ class ToolCallAgent(ReActAgent):
             # Parse arguments
             args = json.loads(command.function.arguments or "{}")
 
+            # 自动注入 caller_id（仅对 Human Agent）
+            if hasattr(self, 'human_id') and self.human_id:
+                # 检查是否是 Human Agent（通过类名判断）
+                if self.__class__.__name__ == "HumanAgent":
+                    if "caller_id" not in args:
+                        args["caller_id"] = self.human_id
+                        logger.info(f"🎯 Human Agent 自动注入 caller_id: '{self.human_id}' for tool '{name}'")
+
             # Execute the tool
-            logger.info(f"🔧 Activating tool: '{name}'...")
+            logger.info(f"🔧 Activating tool: '{name}' with args: {args}")
             result = await self.available_tools.execute(name=name, tool_input=args)
 
             # Handle special tools

@@ -15,6 +15,10 @@ class HTTPMCPTool(BaseTool):
     async def execute(self, **kwargs) -> ToolResult:
         """通过HTTP API执行MCP工具"""
         try:
+            # 添加调试日志
+            from app.logger import logger
+            logger.info(f"🌐 HTTPMCPTool.execute '{self.tool_name}' with caller_id: '{kwargs.get('caller_id', 'NOT_SET')}'")
+
             # 准备请求数据
             data = {
                 'tool_name': self.tool_name,

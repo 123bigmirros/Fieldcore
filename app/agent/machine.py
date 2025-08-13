@@ -209,12 +209,11 @@ class MachineAgent(MCPAgent):
                         distance=distance
                     )
 
-                    # 更新本地位置（step_movement会自动更新世界位置）
-                    self.location = Position(x, y, z)
+                    # 简单记录移动尝试（不强制设置位置）
                     self.last_action = f"move_to({x}, {y}, {z})"
 
                     await self.update_status()
-                    return f"Machine {self.machine_id} 已安全移动到 ({x}, {y}, {z})"
+                    return f"Machine {self.machine_id} 移动命令已执行，目标位置 ({x}, {y}, {z})"
                 else:
                     return f"Machine {self.machine_id} 已在目标位置"
             else:

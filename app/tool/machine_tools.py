@@ -123,13 +123,13 @@ class StepMovementTool(BaseTool):
             if distance == 0:
                 return ToolResult(output=f"Machine {machine_id} direction updated to {facing_direction}")
 
-            # 计算目标位置
+            # 计算目标位置（确保整数坐标）
             current_pos = machine_info.position
-            target_x = current_pos.coordinates[0] + normalized_direction[0] * distance
-            target_y = current_pos.coordinates[1] + normalized_direction[1] * distance
-            target_z = (current_pos.coordinates[2] if len(current_pos.coordinates) > 2 else 0.0) + (normalized_direction[2] if len(normalized_direction) > 2 else 0) * distance
+            target_x = round(current_pos.coordinates[0] + normalized_direction[0] * distance)
+            target_y = round(current_pos.coordinates[1] + normalized_direction[1] * distance)
+            target_z = round((current_pos.coordinates[2] if len(current_pos.coordinates) > 2 else 0.0) + (normalized_direction[2] if len(normalized_direction) > 2 else 0) * distance)
 
-            target_position = Position(target_x, target_y, target_z)
+            target_position = Position(float(target_x), float(target_y), float(target_z))
 
             # 使用逐步移动
             result = await self._step_by_step_movement(machine_id, current_pos, target_position)
@@ -153,7 +153,7 @@ class StepMovementTool(BaseTool):
         dy = target_pos.coordinates[1] - start_pos.coordinates[1]
         dz = (target_pos.coordinates[2] if len(target_pos.coordinates) > 2 else 0.0) - (start_pos.coordinates[2] if len(start_pos.coordinates) > 2 else 0.0)
 
-        # 计算总移动距离，使用1单位作为最小移动步长
+                # 计算总移动距离，使用1单位作为最小移动步长
         total_distance = (dx**2 + dy**2 + dz**2) ** 0.5
         if total_distance == 0:
             return ToolResult(output=f"Machine {machine_id} already at target position")
@@ -180,7 +180,7 @@ class StepMovementTool(BaseTool):
             next_x = start_pos.coordinates[0] + step_x * step
             next_y = start_pos.coordinates[1] + step_y * step
             next_z = (start_pos.coordinates[2] if len(start_pos.coordinates) > 2 else 0.0) + step_z * step
-            next_pos = Position(next_x, next_y, next_z)
+            next_pos = Position(next_x, next_y, next_z)  # Position类会自动四舍五入到整数
 
             # 检查下一步是否会碰撞
             if world_manager.check_collision(next_pos, exclude_machine_id=machine_id):
