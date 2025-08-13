@@ -441,18 +441,21 @@ class MCPServer:
 
         # Register machine tool
         @self.server.tool()
-        async def register_machine(machine_id: str, position: list, life_value: int = 10, machine_type: str = "generic", size: float = 1.0, facing_direction: list = None) -> str:
+        async def register_machine(machine_id: str, position: list, life_value: int = 10, machine_type: str = "generic", size: float = 1.0, facing_direction: list = None, owner: str = "", caller_id: str = "") -> str:
             """Register a new machine in the world."""
             try:
                 pos = Position(*position)
                 facing = tuple(facing_direction) if facing_direction else (1.0, 0.0)
+                # 使用owner参数，如果没有提供则使用caller_id
+                actual_owner = owner if owner else caller_id
                 self.world_manager.register_machine(
                     machine_id=machine_id,
                     position=pos,
                     life_value=life_value,
                     machine_type=machine_type,
                     size=size,
-                    facing_direction=facing
+                    facing_direction=facing,
+                    owner=actual_owner
                 )
                 return f"Machine {machine_id} registered successfully at position {pos} with size {size}"
             except Exception as e:
@@ -503,6 +506,7 @@ class MCPServer:
                         "position": list(info.position.coordinates),
                         "life_value": info.life_value,
                         "machine_type": info.machine_type,
+                        "owner": info.owner,
                         "status": info.status,
                         "last_action": info.last_action,
                         "size": info.size,
@@ -526,6 +530,7 @@ class MCPServer:
                         "position": list(info.position.coordinates),
                         "life_value": info.life_value,
                         "machine_type": info.machine_type,
+                        "owner": info.owner,
                         "status": info.status,
                         "last_action": info.last_action,
                         "size": info.size,

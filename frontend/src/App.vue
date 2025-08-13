@@ -196,10 +196,15 @@ export default {
           this.humanId = this.inputHumanId.trim()
           this.inputHumanId = ''
 
+          // 更新页面标题，方便区分不同标签页
+          document.title = `OpenManus - ${this.humanId}`
+
           // 登录成功后开始刷新数据
           this.startAutoRefresh()
 
-          console.log(`✅ Human ${this.humanId} 创建成功，机器人数量: ${response.data.machine_count}`)
+          console.log(`✅ [${this.humanId}] Human创建成功，机器人数量: ${response.data.actual_count}/${response.data.requested_count}`)
+          console.log(`🔧 [${this.humanId}] 页面窗口信息: ${window.location.href}`)
+          console.log(`📊 [${this.humanId}] 浏览器标签页标识: ${document.title}${Date.now()}`)
         }
       } catch (error) {
         console.error('创建Human失败:', error)
@@ -226,6 +231,9 @@ export default {
         this.activeLasers = []
         this.laserVisionAreas = []
         this.shownAttacks = []
+
+        // 重置页面标题
+        document.title = 'OpenManus'
 
       } catch (error) {
         console.error('删除Human失败:', error)
@@ -300,11 +308,17 @@ export default {
       }
     },
 
-    // ============= 原始刷新数据方法 =============
+        // ============= 原始刷新数据方法 =============
     async refreshData() {
+      // 只有登录后才获取数据
+      if (!this.humanId) {
+        return
+      }
+
       // 获取机器人数据
       try {
-        const response = await axios.get('/mcp/machines')
+        // 添加随机参数避免缓存
+        const response = await axios.get(`/mcp/machines?t=${Date.now()}`)
         let machines = response.data
         if (typeof machines === 'string') {
           try {
@@ -316,13 +330,27 @@ export default {
         if (machines && !Array.isArray(machines) && typeof machines === 'object') {
           machines = Object.values(machines)
         }
-        if (machines && Array.isArray(machines)) {
-          // 为每个机器人添加默认属性（后端现在会自动删除生命值为0的机器人）
+                if (machines && Array.isArray(machines)) {
+          // 显示所有机器人，用颜色区分自己和他人
+          console.log(`🔍 [${this.humanId}] 总机器人数量: ${machines.length}`)
+
+          // 详细显示每个机器人的owner信息
+          machines.forEach(machine => {
+            console.log(`  🤖 ${machine.machine_id}: owner=${machine.owner} ${machine.owner === this.humanId ? '(我的)' : '(他人的)'}`)
+          })
+
+          // 为每个机器人添加默认属性和是否为自己的标记
           this.machines = machines.map(machine => ({
             ...machine,
             visibility_radius: machine.visibility_radius || 3.0,
-            facing_direction: machine.facing_direction || [1.0, 0.0]
+            facing_direction: machine.facing_direction || [1.0, 0.0],
+            isMyMachine: machine.owner === this.humanId
           }))
+
+          const myCount = this.machines.filter(m => m.isMyMachine).length
+          const othersCount = this.machines.filter(m => !m.isMyMachine).length
+          console.log(`👤 [${this.humanId}] 机器人分布: 我的${myCount}个(蓝色) + 他人的${othersCount}个(灰色) = 总计${machines.length}个`)
+          console.log(`👁️ [${this.humanId}] 视野系统: 只有我的机器人能提供视野，他人的机器人只在我的视野内可见`)
 
           // 检查是否有激光攻击效果需要显示（使用处理后的数据）
           this.checkForLaserEffects(this.machines)
@@ -384,12 +412,15 @@ export default {
       const pixelX = worldCenter.x + x * gridSize
       const pixelY = worldCenter.y - y * gridSize  // 反转Y轴：数学坐标系转屏幕坐标系
 
-      return {
+            return {
         left: `${pixelX}px`,
         top: `${pixelY}px`,
         width: `${size}px`,
         height: `${size}px`,
-        transform: `translate(-50%, -50%)`
+        transform: `translate(-50%, -50%)`,
+        // 简单的颜色区分：自己用蓝色，他人用灰色
+        '--machine-color': machine.isMyMachine ? '#74b9ff' : '#95a5a6',
+        opacity: machine.isMyMachine ? 1.0 : 0.7
       }
     },
     getObstacleStyle(obstacle) {
@@ -439,12 +470,14 @@ export default {
     },
     // 检查位置是否可见（包括正常视野和激光路径视野）
     isPositionVisible(position) {
-      // 检查正常机器人视野
+      // 只检查属于当前human的机器人视野
       const inNormalVision = this.machines.some(machine => {
+        // 只有当前human拥有的机器人才能提供视野
+        if (!machine.isMyMachine) return false
         return this.squareDistance(position, machine.position) <= machine.visibility_radius
       })
 
-      // 检查激光路径视野
+      // 检查激光路径视野（只有自己机器人的激光才能提供视野）
       const inLaserVision = this.laserVisionAreas.some(area => {
         const distance = this.squareDistance(position, area.center)
         return distance <= area.radius
@@ -457,11 +490,14 @@ export default {
     checkForLaserEffects(machines) {
       console.log(`🔍 检查激光攻击效果，机器人数量: ${machines.length}`)
       machines.forEach(machine => {
+        // 只处理属于当前human的机器人的激光攻击
+        if (!machine.isMyMachine) return
+
         if (machine.last_action) {
-          console.log(`📡 机器人${machine.machine_id}的最后动作: ${machine.last_action}`)
+          console.log(`📡 我的机器人${machine.machine_id}的最后动作: ${machine.last_action}`)
         }
         if (machine.last_action && machine.last_action.includes('laser_attack')) {
-          console.log(`🎯 发现激光攻击: ${machine.machine_id}`)
+          console.log(`🎯 发现我的机器人激光攻击: ${machine.machine_id}`)
           const timeMatch = machine.last_action.match(/time:(\d+)/)
           if (timeMatch) {
             const attackId = `${machine.machine_id}_${timeMatch[1]}`
@@ -717,8 +753,26 @@ export default {
       console.log(`机器人数量: ${this.machines.length}`)
       console.log(`障碍物数量: ${this.obstacles.length}`)
       console.log(`当前激光视野区域: ${this.laserVisionAreas.length}`)
-      console.log('障碍物位置:', this.obstacles.map(o => `${o.obstacle_id}: (${o.position[0]}, ${o.position[1]})`))
-      console.log('机器人位置:', this.machines.map(m => `${m.machine_id}: (${m.position[0]}, ${m.position[1]})`))
+
+      // 视野系统详细信息
+      const myMachines = this.machines.filter(m => m.isMyMachine)
+      const otherMachines = this.machines.filter(m => !m.isMyMachine)
+      console.log(`\n=== 👁️ 视野系统状态 ===`)
+      console.log(`我的机器人(提供视野): ${myMachines.length}个`)
+      myMachines.forEach(m => {
+        console.log(`  🤖 ${m.machine_id}: (${m.position[0]}, ${m.position[1]}) 视野${m.visibility_radius}格`)
+      })
+      console.log(`他人的机器人(仅在我视野内可见): ${otherMachines.length}个`)
+      otherMachines.forEach(m => {
+        const visible = this.isMachineVisible(m) ? '可见' : '不可见'
+        console.log(`  👻 ${m.machine_id}: (${m.position[0]}, ${m.position[1]}) ${visible}`)
+      })
+
+      console.log('\n障碍物位置:', this.obstacles.map(o => {
+        const visible = this.isObstacleVisible(o) ? '可见' : '不可见'
+        return `${o.obstacle_id}: (${o.position[0]}, ${o.position[1]}) ${visible}`
+      }))
+
       if (this.laserVisionAreas.length > 0) {
         console.log('激光视野中心:', this.laserVisionAreas.map(v => `(${v.center[0].toFixed(1)}, ${v.center[1].toFixed(1)})`))
       }
@@ -783,7 +837,7 @@ export default {
 .machine {
   position: absolute;
   background:
-    linear-gradient(135deg, #74b9ff 0%, #0984e3 100%),
+    linear-gradient(135deg, var(--machine-color, #74b9ff) 0%, color-mix(in srgb, var(--machine-color, #74b9ff) 80%, #000 20%) 100%),
     linear-gradient(135deg, #fff6, #fff0 60%);
   border: 2px solid #fff;
   border-radius: 4px;
@@ -793,7 +847,7 @@ export default {
   color: #fff;
   font-size: 1rem;
   font-weight: 700;
-  box-shadow: 0 0 12px 3px #74b9ffaa, 0 2px 6px #0984e344 inset;
+  box-shadow: 0 0 12px 3px color-mix(in srgb, var(--machine-color, #74b9ff) 70%, #fff 30%), 0 2px 6px color-mix(in srgb, var(--machine-color, #74b9ff) 60%, #000 40%) inset;
   transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
   cursor: pointer;
   user-select: none;

@@ -89,48 +89,29 @@ class HumanAgent(MCPAgent):
             # 初始化MCP连接
             await super().initialize(**kwargs)
 
-        # 创建指定数量的机器人（如果machine_count > 0）
-        if self.machine_count > 0:
-            await self.create_machines(self.machine_count)
+        # 机器人创建现在由外部调用 create_machine_at_position 来控制
 
         logger.info(f"✅ Human Commander {self.human_id} 初始化完成，MCP连接正常")
 
-    async def create_machines(self, machine_count: int) -> None:
-        """创建指定数量的机器人到MCP服务器"""
+    async def create_machine_at_position(self, machine_id: str, position: list) -> bool:
+        """在指定位置创建单个机器人"""
         try:
-            logger.info(f"🤖 创建 {machine_count} 个机器人...")
-
-            for i in range(machine_count):
-                machine_id = f"robot_{i+1:02d}"
-
-                # 简单的位置分配：网格排列，确保整数坐标
-                # 按行排列，每行3个机器人
-                row = i // 3
-                col = i % 3
-                x = float(col - 1)  # -1, 0, 1
-                y = float(row)      # 0, 1, 2, ...
-                position = [x, y, 0.0]
-
-                # 基本朝向
-                facing_direction = [1.0, 0.0]
-
-                # 注册机器人到MCP服务器（传递owner信息）
-                result = await self.call_tool(
-                    "mcp_python_register_machine",
-                    machine_id=machine_id,
-                    position=position,
-                    life_value=10,
-                    machine_type="worker",
-                    size=1.0,
-                    facing_direction=facing_direction,
-                    owner=self.human_id
-                )
-
-                logger.info(f"  ✅ 创建机器人: {machine_id} 在位置 {position}")
-
+            # 注册机器人到MCP服务器
+            result = await self.call_tool(
+                "mcp_python_register_machine",
+                machine_id=machine_id,
+                position=position,
+                life_value=10,
+                machine_type="worker",
+                size=1.0,
+                facing_direction=[1.0, 0.0],
+                owner=self.human_id
+            )
+            logger.info(f"  ✅ 创建机器人: {machine_id} 在位置 {position}")
+            return True
         except Exception as e:
-            logger.error(f"创建机器人失败: {e}")
-            raise
+            logger.error(f"创建机器人 {machine_id} 失败: {e}")
+            return False
 
     # 删除_find_safe_positions方法 - 这个复杂逻辑应该移到工具层
 

@@ -16,11 +16,41 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from app.logger import logger
+import random
 
 # 全局human管理器和事件循环
 HUMAN_MANAGERS = {}  # human_id -> HumanAgent
 GLOBAL_LOOP = None
 LOOP_THREAD = None
+
+async def find_random_valid_position(human_agent, max_attempts=50):
+    """在地图范围内找到一个合法的随机位置"""
+    # 地图范围：-14 到 14（避开边界墙）
+    map_range = 14
+
+    for _ in range(max_attempts):
+        # 生成随机坐标
+        x = random.randint(-map_range + 1, map_range - 1)
+        y = random.randint(-map_range + 1, map_range - 1)
+        position = [float(x), float(y), 0.0]
+
+        # 检查位置是否合法（无碰撞）
+        try:
+            result = await human_agent.call_tool("mcp_python_check_collision",
+                                               position=position, size=1.0)
+
+            # 解析检查结果
+            if hasattr(result, 'output'):
+                import json
+                collision_data = json.loads(result.output)
+                if not collision_data.get('collision', True):  # 无碰撞
+                    return position
+        except Exception as e:
+            logger.warning(f"位置检查失败 {position}: {e}")
+            continue
+
+    logger.error(f"尝试了 {max_attempts} 次都无法找到合法位置")
+    return None
 
 def run_async_task(coro):
     """在全局事件循环中运行异步任务"""
@@ -66,42 +96,50 @@ def create_app():
             # 使用与test_human_machine_lineup_simple.py完全相同的逻辑
             from app.agent.human import create_human_commander
 
-            async def create_human_async():
+            async def create_human_with_machines():
+                # 创建Human Agent（不自动创建机器人）
                 human = await create_human_commander(
                     human_id=human_id,
-                    machine_count=machine_count,  # 让Human Agent在世界中注册机器人
+                    machine_count=0,  # 不让Human Agent自动创建机器人
                     mcp_connection_params={
                         "connection_type": "http_api",
                         "server_url": "http://localhost:8003"
                     }
                 )
-                return human
 
-            human = run_async_task(create_human_async())
+                # 在随机位置创建机器人
+                created_machines = []
+                for i in range(machine_count):
+                    machine_id = f"{human_id}_robot_{i+1:02d}"
+
+                    # 找到合法的随机位置
+                    position = await find_random_valid_position(human)
+                    if position:
+                        success = await human.create_machine_at_position(machine_id, position)
+                        if success:
+                            created_machines.append(machine_id)
+                            logger.info(f"🤖 为 {human_id} 创建机器人 {machine_id} 在位置 {position}")
+                        else:
+                            logger.warning(f"⚠️ 机器人 {machine_id} 创建失败")
+                    else:
+                        logger.warning(f"⚠️ 无法为机器人 {machine_id} 找到合法位置")
+
+                # 注册成功创建的机器人到MCP控制系统
+                for machine_id in created_machines:
+                    await human.call_tool("mcp_python_register_machine_control", machine_id=machine_id)
+                    logger.info(f"✅ 注册机器人 {machine_id} 到MCP控制系统 (owner: {human_id})")
+
+                return human, len(created_machines)
+
+            human, actual_count = run_async_task(create_human_with_machines())
             HUMAN_MANAGERS[human_id] = human
-
-            # 注册机器人到MCP控制系统（不再需要回调URL）
-            async def register_machine_control():
-                # 获取所有在世界中的机器人
-                all_machines_result = await human.call_tool("mcp_python_get_all_machines")
-
-                if hasattr(all_machines_result, 'output'):
-                    import json
-                    machines_data = json.loads(all_machines_result.output)
-
-                    for machine_id in machines_data.keys():
-                        if machine_id.startswith("robot_"):  # 只注册我们创建的机器人
-                            await human.call_tool("mcp_python_register_machine_control",
-                                                machine_id=machine_id)
-                            logger.info(f"✅ 注册机器人 {machine_id} 到MCP控制系统")
-
-            run_async_task(register_machine_control())
 
             return jsonify({
                 'status': 'success',
                 'human_id': human_id,
-                'machine_count': machine_count,
-                'message': f'Human {human_id} created with {machine_count} machines registered in MCP server'
+                'requested_count': machine_count,
+                'actual_count': actual_count,
+                'message': f'Human {human_id} created with {actual_count}/{machine_count} machines at random positions'
             })
 
         except Exception as e:
