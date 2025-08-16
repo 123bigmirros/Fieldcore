@@ -220,29 +220,3 @@ class HumanAgent(MCPAgent):
         pass
 
 
-# 便捷创建函数
-async def create_human_commander(human_id: str = None,
-                               machine_count: int = 3,
-                               mcp_connection_params: dict = None) -> HumanAgent:
-    """
-    便捷创建和初始化Human Commander
-
-    Args:
-        human_id: 指挥官ID
-        machine_count: 要创建的机器人数量
-        mcp_connection_params: MCP连接参数，如果为None则使用默认参数
-
-    Returns:
-        已初始化的Human Commander
-    """
-    commander = HumanAgent(
-        human_id=human_id,
-        machine_count=machine_count
-    )
-
-    if mcp_connection_params:
-        await commander.initialize(**mcp_connection_params)
-    else:
-        await commander.initialize()
-
-    return commander

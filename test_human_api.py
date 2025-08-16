@@ -112,7 +112,7 @@ def main():
     all_machines = check_all_machines()
 
     # 2. 获取3号机器人的初始位置
-    target_machine = "robot_03"  # 使用已知的机器人ID
+    target_machine = "test_commander_robot_01"  # 使用已知的机器人ID
     print(f"🎯 目标机器人: {target_machine}")
 
     if target_machine not in all_machines:
