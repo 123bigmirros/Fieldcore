@@ -89,6 +89,16 @@
         <button @click="exitSystem" class="exit-button">退出系统</button>
       </div>
 
+      <!-- 视野中心控制器 -->
+      <ViewCenterController
+        :machines="machines"
+        :human-id="humanId"
+        @view-center-changed="handleViewCenterChanged"
+        @focus-machine="handleFocusMachine"
+        @reset-view-center="handleResetViewCenter"
+        @show-message="handleShowMessage"
+      />
+
       <!-- 指令输入框 -->
       <div v-if="showCommandInput" class="command-input-overlay">
         <div class="command-input-box">
@@ -115,8 +125,13 @@
 
 <script>
 import axios from 'axios'
+import ViewCenterController from './components/ViewCenterController.vue'
+
 export default {
   name: 'App',
+  components: {
+    ViewCenterController
+  },
   data() {
     return {
       // 原始数据
@@ -141,7 +156,12 @@ export default {
       isSendingCommand: false, // 是否正在发送指令
       commandError: '', // 指令错误信息
       spaceKeyCount: 0, // 空格键计数
-      spaceKeyTimer: null // 空格键定时器
+      spaceKeyTimer: null, // 空格键定时器
+
+      // 视野中心控制
+      viewCenterOffset: { x: 0, y: 0 }, // 视野中心偏移量
+      viewRotation: 0, // 视野旋转角度（弧度）
+      messageToShow: null // 显示的消息
     }
   },
   mounted() {
@@ -231,6 +251,10 @@ export default {
         this.activeLasers = []
         this.laserVisionAreas = []
         this.shownAttacks = []
+
+        // 重置视野中心
+        this.viewCenterOffset = { x: 0, y: 0 }
+        this.viewRotation = 0
 
         // 重置页面标题
         document.title = 'OpenManus'
@@ -399,18 +423,22 @@ export default {
 
       // 网格系统：每个单位固定大小
       const gridSize = 30  // 每个网格30px
-      // 动态计算屏幕中心作为世界原点
+
+      // 应用旋转变换
+      const rotatedCoords = this.applyRotationTransform(x * gridSize, -y * gridSize)
+
+      // 动态计算屏幕中心作为世界原点，加上视野中心偏移
       const worldCenter = {
-        x: window.innerWidth / 2,
-        y: window.innerHeight / 2
+        x: window.innerWidth / 2 + this.viewCenterOffset.x,
+        y: window.innerHeight / 2 + this.viewCenterOffset.y
       }
 
       // 机器人大小等于一个网格单位
       const size = (machine.size || 1.0) * gridSize
 
-      // 机器人可以自由定位，不必对齐网格
-      const pixelX = worldCenter.x + x * gridSize
-      const pixelY = worldCenter.y - y * gridSize  // 反转Y轴：数学坐标系转屏幕坐标系
+      // 使用旋转后的坐标
+      const pixelX = worldCenter.x + rotatedCoords.x
+      const pixelY = worldCenter.y + rotatedCoords.y
 
             return {
         left: `${pixelX}px`,
@@ -428,18 +456,22 @@ export default {
 
       // 网格系统：每个单位固定大小
       const gridSize = 30  // 每个网格30px
-      // 动态计算屏幕中心作为世界原点
+
+      // 应用旋转变换
+      const rotatedCoords = this.applyRotationTransform(x * gridSize, -y * gridSize)
+
+      // 动态计算屏幕中心作为世界原点，加上视野中心偏移
       const worldCenter = {
-        x: window.innerWidth / 2,
-        y: window.innerHeight / 2
+        x: window.innerWidth / 2 + this.viewCenterOffset.x,
+        y: window.innerHeight / 2 + this.viewCenterOffset.y
       }
 
       // 障碍物严格占据一个网格单位
       const size = gridSize  // 固定网格大小，确保无间隙
 
-      // 障碍物严格对齐到网格中心
-      const pixelX = worldCenter.x + x * gridSize
-      const pixelY = worldCenter.y - y * gridSize  // 反转Y轴：数学坐标系转屏幕坐标系
+      // 使用旋转后的坐标
+      const pixelX = worldCenter.x + rotatedCoords.x
+      const pixelY = worldCenter.y + rotatedCoords.y
 
       return {
         left: `${pixelX}px`,
@@ -625,14 +657,29 @@ export default {
     // 网格坐标转换为屏幕坐标
     gridToPixel(gridX, gridY) {
       const gridSize = 30
+
+      // 应用旋转变换
+      const rotatedCoords = this.applyRotationTransform(gridX * gridSize, -gridY * gridSize)
+
       const worldCenter = {
-        x: window.innerWidth / 2,
-        y: window.innerHeight / 2
+        x: window.innerWidth / 2 + this.viewCenterOffset.x,
+        y: window.innerHeight / 2 + this.viewCenterOffset.y
       }
 
       return {
-        x: worldCenter.x + gridX * gridSize,
-        y: worldCenter.y - gridY * gridSize // 反转Y轴
+        x: worldCenter.x + rotatedCoords.x,
+        y: worldCenter.y + rotatedCoords.y
+      }
+    },
+
+    // 应用旋转变换
+    applyRotationTransform(x, y) {
+      const cos = Math.cos(this.viewRotation)
+      const sin = Math.sin(this.viewRotation)
+
+      return {
+        x: x * cos - y * sin,
+        y: x * sin + y * cos
       }
     },
 
@@ -675,12 +722,17 @@ export default {
     getFrontStyle(machine) {
       const [dx, dy] = machine.facing_direction || [1, 0]
 
-      // 将方向向量转换为4个基本方向
+      // 应用旋转变换到机器人的朝向向量
+      const rotatedDirection = this.applyRotationTransform(dx, -dy) // 注意Y轴反转
+      const rotatedDx = rotatedDirection.x
+      const rotatedDy = -rotatedDirection.y // 再次反转回屏幕坐标系
+
+      // 将旋转后的方向向量转换为4个基本方向
       let direction = 'right' // 默认向右
-      if (Math.abs(dx) > Math.abs(dy)) {
-        direction = dx > 0 ? 'right' : 'left'
+      if (Math.abs(rotatedDx) > Math.abs(rotatedDy)) {
+        direction = rotatedDx > 0 ? 'right' : 'left'
       } else {
-        direction = dy > 0 ? 'up' : 'down'
+        direction = rotatedDy > 0 ? 'up' : 'down'
       }
 
       // 根据方向设置前端指示器位置和形状
@@ -793,6 +845,36 @@ export default {
     toggleGridOverlay() {
       this.showGrid = !this.showGrid
       console.log(`🔲 网格辅助线: ${this.showGrid ? '开启' : '关闭'}`)
+    },
+
+    // ============= 视野中心控制事件处理 =============
+    // 处理视野中心偏移变化
+    handleViewCenterChanged(data) {
+      this.viewCenterOffset.x = data.offset.x
+      this.viewCenterOffset.y = data.offset.y
+      this.viewRotation = data.rotation
+    },
+
+    // 处理聚焦到机器人事件
+    handleFocusMachine(data) {
+      const rotationDegrees = (data.rotation * 180 / Math.PI).toFixed(1)
+      console.log(`🎯 聚焦到机器人: ${data.machineId} 位置: (${data.position[0]}, ${data.position[1]}), 朝向: (${data.facing[0]}, ${data.facing[1]}), 旋转: ${rotationDegrees}°`)
+    },
+
+    // 处理重置视野中心事件
+    handleResetViewCenter() {
+      console.log(`🏠 视野中心已重置`)
+    },
+
+    // 处理显示消息事件
+    handleShowMessage(message) {
+      console.log(`📢 消息: ${message.message}`)
+      // 这里可以添加消息显示逻辑，比如toast通知
+      this.messageToShow = message
+      // 3秒后清除消息
+      setTimeout(() => {
+        this.messageToShow = null
+      }, 3000)
     }
   }
 }
