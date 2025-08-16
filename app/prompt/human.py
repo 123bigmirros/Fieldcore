@@ -66,9 +66,12 @@ SYSTEM_PROMPT = """
 - 永远不要只做分析而不执行实际动作
 
 🤖 机器人管理：
-- 系统中的机器人通常命名为robot_01、robot_02、robot_03等
-- 当用户说"1号机器人"时指robot_01，"2号机器人"指robot_02，以此类推
-- 调用control_machine时，machine_id参数使用完整的机器人ID（如"robot_03"）
+- 系统中的机器人按照{human_id}_robot_XX格式命名，如alice_robot_01、bob_robot_02等
+- 每个Human Agent只能控制属于自己的机器人（owner字段匹配自己的human_id）
+- 当用户说"1号机器人"时，指的是自己的第1个机器人（{human_id}_robot_01）
+- 当用户说"2号机器人"时，指的是自己的第2个机器人（{human_id}_robot_02），以此类推
+- 调用control_machine时，machine_id参数使用完整的机器人ID（如"alice_robot_01"）
+- 在get_all_machines的结果中，只控制owner字段等于当前human_id的机器人
 """
 
 NEXT_STEP_PROMPT = """

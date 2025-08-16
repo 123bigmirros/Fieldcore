@@ -146,38 +146,72 @@ export default {
       }
     },
 
-        // 将视野中心移动到指定编号的机器人
+                // 将视野中心移动到指定编号的机器人
     focusOnMachine(machineNumber) {
       if (!this.humanId) return
 
+      // 调试信息：显示所有机器人和筛选结果
+      console.log(`🔍 调试按键${machineNumber}:`)
+      console.log(`  当前Human ID: ${this.humanId}`)
+      console.log(`  所有机器人数量: ${this.machines.length}`)
+
+      // 显示所有机器人的详细信息
+      this.machines.forEach((machine, index) => {
+        console.log(`    机器人${index + 1}: ${machine.machine_id}, owner: ${machine.owner}, isMyMachine: ${machine.isMyMachine}`)
+      })
+
+      console.log(`  我的机器人数量: ${this.myMachines.length}`)
+      this.myMachines.forEach((machine, index) => {
+        console.log(`    我的机器人${index + 1}: ${machine.machine_id}, owner: ${machine.owner}`)
+      })
+
+      // 按键编号对应我的机器人顺序：按键1->我的第1个机器人, 按键2->我的第2个机器人
       if (machineNumber > this.myMachines.length || machineNumber < 1) {
-        console.log(`⚠️ 没有第${machineNumber}个机器人，当前只有${this.myMachines.length}个机器人`)
+        console.log(`⚠️ 没有第${machineNumber}个属于我的机器人，当前只有${this.myMachines.length}个`)
         this.$emit('show-message', {
           type: 'warning',
-          message: `没有第${machineNumber}个机器人，当前只有${this.myMachines.length}个机器人`
+          message: `没有第${machineNumber}个属于我的机器人，当前只有${this.myMachines.length}个`
         })
         return
       }
 
+      // 直接按顺序获取我的第N个机器人
       const targetMachine = this.myMachines[machineNumber - 1]
-      if (!targetMachine) return
+      if (!targetMachine) {
+        console.log(`⚠️ 无法获取我的第${machineNumber}个机器人`)
+        return
+      }
+
+      console.log(`✅ 选中机器人: ${targetMachine.machine_id}, owner: ${targetMachine.owner}`)
+
+                              // 计算机器人朝向角度并设置视野旋转（视角对齐）
+      const [dx, dy] = targetMachine.facing_direction || [1.0, 0.0]
+      this.viewRotation = this.calculateRotationAngle(dx, dy)
 
       // 计算视野偏移量，使机器人位置成为屏幕中心
       const [machineX, machineY] = targetMachine.position
 
-      // 计算需要的偏移量（负值是因为我们要移动世界，使机器人位置对应屏幕中心）
-      this.viewOffset.x = -machineX * this.gridSize
-      this.viewOffset.y = machineY * this.gridSize  // Y轴反转
+      // 先应用旋转变换到机器人位置
+      const rotatedPosition = this.applyRotationTransform(machineX * this.gridSize, -machineY * this.gridSize)
 
-      // 计算机器人朝向角度并设置视野旋转
-      const [dx, dy] = targetMachine.facing_direction || [1.0, 0.0]
-      this.viewRotation = this.calculateRotationAngle(dx, dy)
+      // 计算需要的偏移量（负值是因为我们要移动世界，使旋转后的机器人位置对应屏幕中心）
+      this.viewOffset.x = -rotatedPosition.x
+      this.viewOffset.y = -rotatedPosition.y
+
+      console.log(`📐 坐标计算详情:`)
+      console.log(`  机器人世界坐标: (${machineX}, ${machineY})`)
+      console.log(`  网格大小: ${this.gridSize}px`)
+      console.log(`  旋转角度: ${(this.viewRotation * 180 / Math.PI).toFixed(1)}°`)
+      console.log(`  旋转后位置: (${rotatedPosition.x.toFixed(1)}, ${rotatedPosition.y.toFixed(1)})`)
+      console.log(`  计算的视野偏移: (${this.viewOffset.x.toFixed(1)}, ${this.viewOffset.y.toFixed(1)})`)
+      console.log(`  屏幕尺寸: ${window.innerWidth}x${window.innerHeight}`)
+      console.log(`  屏幕中心: (${window.innerWidth/2}, ${window.innerHeight/2})`)
 
       // 设置跟随状态
       this.isFollowingMachine = true
       this.followingMachineId = targetMachine.machine_id
 
-      console.log(`🎯 视野中心移动到机器人 ${targetMachine.machine_id} (第${machineNumber}个) 位置: (${machineX}, ${machineY}), 朝向: (${dx}, ${dy}), 旋转角度: ${(this.viewRotation * 180 / Math.PI).toFixed(1)}°`)
+      console.log(`🎯 按键${machineNumber} -> 我的第${machineNumber}个机器人 ${targetMachine.machine_id} 居中显示并对齐视角，位置: (${machineX}, ${machineY}), 朝向: (${dx}, ${dy}), 旋转角度: ${(this.viewRotation * 180 / Math.PI).toFixed(1)}°`)
 
       // 通知父组件
       this.$emit('focus-machine', {
@@ -202,7 +236,7 @@ export default {
       this.$emit('reset-view-center')
     },
 
-        // 更新跟随机器人的视野中心
+            // 更新跟随机器人的视野中心
     updateFollowingViewCenter() {
       if (!this.isFollowingMachine || !this.followingMachineId) return
 
@@ -217,22 +251,42 @@ export default {
         return
       }
 
-      // 平滑跟随机器人移动（实时更新视野中心）
+                  // 平滑跟随机器人移动和旋转（实时更新位置和朝向）
       const [machineX, machineY] = followingMachine.position
       const [dx, dy] = followingMachine.facing_direction || [1.0, 0.0]
 
-      const targetOffsetX = -machineX * this.gridSize
-      const targetOffsetY = machineY * this.gridSize
+      // 计算目标旋转角度（实时跟随机器人朝向）
       const targetRotation = this.calculateRotationAngle(dx, dy)
 
-      // 使用线性插值实现平滑移动和旋转
-      const lerpFactor = 0.2 // 调整这个值可以改变跟随的平滑度
-      this.viewOffset.x += (targetOffsetX - this.viewOffset.x) * lerpFactor
-      this.viewOffset.y += (targetOffsetY - this.viewOffset.y) * lerpFactor
+      // 先应用旋转变换到机器人位置
+      const rotatedPosition = this.applyRotationTransform(machineX * this.gridSize, -machineY * this.gridSize)
 
-      // 平滑旋转角度插值（处理角度的循环性质）
+      // 计算目标偏移量
+      const targetOffsetX = -rotatedPosition.x
+      const targetOffsetY = -rotatedPosition.y
+
+      // 使用线性插值实现平滑移动和旋转
+      const lerpFactor = 0.15 // 适中的平滑度，既不会闪烁也不会太慢
+
+      // 计算偏移差值
+      const offsetDiffX = targetOffsetX - this.viewOffset.x
+      const offsetDiffY = targetOffsetY - this.viewOffset.y
       const rotationDiff = this.normalizeAngleDifference(targetRotation - this.viewRotation)
-      this.viewRotation += rotationDiff * lerpFactor
+
+      // 设置阈值，避免微小抖动
+      const positionThreshold = 0.3 // 降低位置阈值，更敏感
+      const rotationThreshold = 0.005 // 降低旋转阈值，更敏感（约0.3度）
+
+      // 同时更新位置和旋转角度
+      if (Math.abs(offsetDiffX) > positionThreshold) {
+        this.viewOffset.x += offsetDiffX * lerpFactor
+      }
+      if (Math.abs(offsetDiffY) > positionThreshold) {
+        this.viewOffset.y += offsetDiffY * lerpFactor
+      }
+      if (Math.abs(rotationDiff) > rotationThreshold) {
+        this.viewRotation += rotationDiff * lerpFactor
+      }
     },
 
     // 提取机器人显示名称
@@ -265,7 +319,7 @@ export default {
       const machineAngle = Math.atan2(-dy, dx) // 注意Y轴反转
       // 目标角度是正上方：π/2 (90度)
       const targetAngle = Math.PI / 2
-      // 计算需要旋转的角度：当前角度 - 目标角度（反向）
+      // 计算需要旋转的角度：当前角度 - 目标角度（让世界反向旋转）
       let rotationAngle = machineAngle - targetAngle
       // 规范化角度，确保使用最短路径
       rotationAngle = this.normalizeAngleDifference(rotationAngle)
@@ -282,6 +336,17 @@ export default {
         angleDiff += 2 * Math.PI
       }
       return angleDiff
+    },
+
+    // 应用旋转变换
+    applyRotationTransform(x, y) {
+      const cos = Math.cos(this.viewRotation)
+      const sin = Math.sin(this.viewRotation)
+
+      return {
+        x: x * cos - y * sin,
+        y: x * sin + y * cos
+      }
     }
   }
 }
