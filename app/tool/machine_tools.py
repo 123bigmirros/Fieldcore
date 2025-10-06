@@ -13,7 +13,7 @@ from app.tool.base import BaseTool, ToolResult
 class CheckEnvironmentTool(BaseTool):
     """Tool for checking the surrounding environment and nearby machines."""
 
-    name: str = "check_environment"
+    name: str = "machine_check_environment"
     description: str = "Check the surrounding environment to get information about nearby machines and their positions."
     parameters: dict = {
         "type": "object",
@@ -77,7 +77,7 @@ class CheckEnvironmentTool(BaseTool):
 class StepMovementTool(BaseTool):
     """Tool for step-by-step movement with collision checking and direction setting."""
 
-    name: str = "step_movement"
+    name: str = "machine_step_movement"
     description: str = "Move machine step-by-step towards target, stopping at obstacles. Supports four cardinal directions: East [1,0,0], North [0,1,0], West [-1,0,0], South [0,-1,0]. Set distance=0 to only change direction without moving."
     parameters: dict = {
         "type": "object",
@@ -266,7 +266,7 @@ class MachineActionTool(BaseTool):
 class LaserAttackTool(MachineActionTool):
     """Tool for performing laser attacks on other machines."""
 
-    name: str = "laser_attack"
+    name: str = "machine_laser_attack"
     description: str = "Perform a laser attack in the machine's facing direction. Laser can damage other machines and is blocked by obstacles."
     parameters: dict = {
         "type": "object",
@@ -504,7 +504,7 @@ class LaserAttackTool(MachineActionTool):
 class GetSelfStatusTool(BaseTool):
     """Tool for machine to get its own status information."""
 
-    name: str = "get_self_status"
+    name: str = "machine_get_self_status"
     description: str = "Get the machine's own current status including position, facing_direction (cardinal direction the machine is facing), life_value, etc. Use this to check current facing direction before moving."
     parameters: dict = {
         "type": "object",

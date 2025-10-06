@@ -37,11 +37,15 @@ class HumanController:
             try:
                 result = await human_agent.call_tool("mcp_python_check_collision",
                                                    position=position, size=1.0)
-                # 解析检查结果
+                # 解析检查结果 - HTTPMCPTool返回嵌套JSON
                 if hasattr(result, 'output'):
-                    collision_data = json.loads(result.output)
-                    if not collision_data.get('collision', True):  # 无碰撞
-                        return position
+                    # 第一层解析：ToolResult.output -> dict
+                    outer_data = json.loads(result.output)
+                    # 第二层解析：dict['output'] -> 碰撞检测结果
+                    if outer_data.get('output'):
+                        collision_data = json.loads(outer_data['output'])
+                        if not collision_data.get('collision', True):  # 无碰撞
+                            return position
             except Exception as e:
                 logger.warning(f"位置检查失败 {position}: {e}")
                 continue

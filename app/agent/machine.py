@@ -90,11 +90,46 @@ class MachineAgent(MCPAgent):
 
         logger.info(f"🤖 Smart Machine {self.machine_id} 已创建 at {self.location} (size: {self.size})")
 
-    # 删除initialize方法 - Machine Agent由MCP服务器直接创建和管理
+    async def initialize(self, **kwargs) -> None:
+        """
+        初始化流程 - 连接到MCP服务器
+        """
+        # HTTP API连接
+        if not kwargs or kwargs.get("connection_type") == "http_api":
+            kwargs = {
+                "connection_type": "http_api",
+                "server_url": "http://localhost:8003"
+            }
 
-    # 删除initialize_with_shared_connection方法 - 不再使用共享连接模式
+        # 初始化MCP连接
+        await super().initialize(**kwargs)
 
-    # 删除register_machine方法 - 由MCP服务器处理注册
+        # 动态添加工具信息到系统消息
+        await self._update_system_message_with_tool_details()
+
+        logger.info(f"✅ Smart Machine {self.machine_id} 初始化完成")
+
+    async def _update_system_message_with_tool_details(self) -> None:
+        """动态更新系统消息，添加工具信息"""
+        if not self.mcp_clients or not self.mcp_clients.tool_map:
+            return
+        # 生成工具列表，只显示Machine Agent专用工具
+        tools_list = []
+        for tool_name, tool_info in self.mcp_clients.tool_map.items():
+            # 只显示以machine_开头的工具
+            if tool_name.startswith('machine_') or tool_name.startswith('mcp_python_machine_'):
+                # 兼容两种工具格式：字典和HTTPMCPTool对象
+                if hasattr(tool_info, 'description'):
+                    description = tool_info.description
+                    tools_list.append(f"- {tool_name}: {description}")
+        tools_text = "\n".join(tools_list)
+        # 更新系统消息
+        if self.memory.messages and self.memory.messages[0].role == "system":
+            content = self.memory.messages[0].content
+            base_prompt = content.split("\n\nAvailable MCP tools:")[0]
+            new_content = f"{base_prompt}\n\n🔧 当前可用工具:\n{tools_text}"
+            from app.schema import Message
+            self.memory.messages[0] = Message.system_message(new_content)
 
     async def update_system_prompt(self) -> None:
         """更新系统提示词包含当前机器人信息"""
@@ -139,191 +174,7 @@ class MachineAgent(MCPAgent):
         # 调用父类方法
         return super()._should_finish_execution(name, **kwargs)
 
-    # 删除start_command_listener方法 - 不再使用listener模式
 
-    # 删除_listen_for_commands方法 - 不再使用listener模式
-
-    # 删除_preempt_and_execute_command方法 - 不再使用挤占式执行
-
-    # 删除_process_single_command方法 - 不再使用listener模式
-
-    # 删除_execute_command方法 - 不再使用listener模式，改用_direct_control
-
-    # 删除stop_command_listener方法 - 不再使用listener模式
-
-    # 删除get_pending_commands方法 - 命令监听器中已有相同功能
-
-    # 删除execute_command方法 - 与_execute_command重复，使用_process_single_command代替
-
-    async def process_command_type(self, command_type: str, parameters: Dict[str, Any]) -> str:
-        """处理不同类型的命令"""
-        if command_type == "move_to":
-            return await self.handle_move_to_command(parameters)
-        elif command_type == "perform_action":
-            # 兼容旧的perform_action命令，转换为具体攻击类型
-            action = parameters.get("action", "")
-            if action == "laser_attack":
-                return await self.handle_laser_attack_command(parameters)
-            else:
-                return f"不支持的动作类型: {action}"
-        elif command_type == "check_environment":
-            return await self.handle_environment_check_command(parameters)
-        elif command_type == "laser_attack":
-            return await self.handle_laser_attack_command(parameters)
-        else:
-            return f"未知命令类型: {command_type}"
-
-    async def handle_move_to_command(self, parameters: Dict[str, Any]) -> str:
-        """处理移动命令，使用安全的step_movement"""
-        try:
-            position = parameters.get("position", [])
-            if len(position) >= 2:
-                x, y = position[0], position[1]
-                z = position[2] if len(position) > 2 else 0.0
-
-                # 添加移动提示
-                from app.schema import Message
-                current_x, current_y, current_z = self.location.coordinates[0], self.location.coordinates[1], self.location.coordinates[2] if len(self.location.coordinates) > 2 else 0.0
-                self.memory.add_message(Message.system_message(
-                    MOVE_COMMAND_PROMPT.format(
-                        target_position=f"({x}, {y}, {z})",
-                        current_position=f"({current_x}, {current_y}, {current_z})"
-                    )
-                ))
-
-                # 计算移动方向和距离
-                current_pos = self.location.coordinates
-                direction = [
-                    x - current_pos[0],
-                    y - current_pos[1],
-                    z - (current_pos[2] if len(current_pos) > 2 else 0.0)
-                ]
-                distance = (direction[0]**2 + direction[1]**2 + direction[2]**2) ** 0.5
-
-                if distance > 0:
-                    # 使用安全的step_movement
-                    result = await self.call_tool(
-                        "step_movement",
-                        machine_id=self.machine_id,
-                        direction=direction,
-                        distance=distance
-                    )
-
-                    # 简单记录移动尝试（不强制设置位置）
-                    self.last_action = f"move_to({x}, {y}, {z})"
-
-                    await self.update_status()
-                    return f"Machine {self.machine_id} 移动命令已执行，目标位置 ({x}, {y}, {z})"
-                else:
-                    return f"Machine {self.machine_id} 已在目标位置"
-            else:
-                return "无效的位置参数"
-
-        except Exception as e:
-            return f"移动命令失败: {str(e)}"
-
-    # Note: Generic action handling removed - use specific action tools like laser_attack
-
-    async def handle_environment_check_command(self, parameters: Dict[str, Any]) -> str:
-        """处理环境检查命令"""
-        try:
-            check_type = parameters.get("check_type", "general")
-            radius = parameters.get("radius", 3.0)
-
-            # 添加环境检查提示
-            from app.schema import Message
-            current_x, current_y, current_z = self.location.coordinates[0], self.location.coordinates[1], self.location.coordinates[2] if len(self.location.coordinates) > 2 else 0.0
-            self.memory.add_message(Message.system_message(
-                ENVIRONMENT_CHECK_PROMPT.format(
-                    check_type=check_type,
-                    radius=radius,
-                    current_position=f"({current_x}, {current_y}, {current_z})"
-                )
-            ))
-
-            # 使用MCP工具检查环境
-            result = await self.call_tool(
-                "check_environment",
-                machine_id=self.machine_id,
-                radius=radius
-            )
-
-            self.last_action = f"check_environment({check_type})"
-            await self.update_status()
-            return f"Machine {self.machine_id} 环境检查完成 (半径: {radius})"
-
-        except Exception as e:
-            return f"环境检查失败: {str(e)}"
-
-    async def handle_laser_attack_command(self, parameters: Dict[str, Any]) -> str:
-        """处理激光攻击命令"""
-        try:
-            range_val = parameters.get("range", 5.0)
-            damage = parameters.get("damage", 1)
-
-            # 使用MCP工具执行激光攻击
-            result = await self.call_tool(
-                "laser_attack",
-                machine_id=self.machine_id,
-                range=range_val,
-                damage=damage
-            )
-
-            self.last_action = f"laser_attack(range:{range_val}, damage:{damage})"
-            await self.update_status()
-            return f"Machine {self.machine_id} 发射激光攻击 (射程: {range_val}, 伤害: {damage})"
-
-        except Exception as e:
-            return f"激光攻击失败: {str(e)}"
-
-    async def call_tool(self, tool_name: str, **kwargs) -> Any:
-        """重写call_tool方法以支持内部连接模式"""
-        if hasattr(self, '_internal_server'):
-            # 内部连接模式 - 直接调用服务器方法
-            server_instance = self._internal_server
-            try:
-                # 去掉mcp_python_前缀，因为内部调用不需要
-                actual_tool_name = tool_name
-                if tool_name.startswith("mcp_python_"):
-                    actual_tool_name = tool_name[11:]  # 移除"mcp_python_"前缀
-
-                result = await server_instance.call_tool(actual_tool_name, kwargs)
-                return result
-            except Exception as e:
-                logger.error(f"Error calling tool '{tool_name}' internally: {e}")
-                raise
-        else:
-            # 外部连接模式 - 使用父类方法
-            return await super().call_tool(tool_name, **kwargs)
-
-    async def update_status(self) -> None:
-        """更新机器人状态"""
-        # 更新世界管理器中的last_action
-        if self.last_action:
-            try:
-                # 内部连接模式，直接调用服务器方法
-                if hasattr(self, '_internal_server'):
-                    self._internal_server.world_manager.update_machine_action(self.machine_id, self.last_action)
-                else:
-                    await self.call_tool(
-                        "mcp_python_update_machine_action",
-                        machine_id=self.machine_id,
-                        action=self.last_action
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to update machine action: {e}")
-
-        # 添加状态更新提示
-        from app.schema import Message
-        x, y, z = self.location.coordinates[0], self.location.coordinates[1], self.location.coordinates[2] if len(self.location.coordinates) > 2 else 0.0
-        self.memory.add_message(Message.system_message(
-            STATUS_UPDATE_PROMPT.format(
-                machine_id=self.machine_id,
-                new_position=f"({x}, {y}, {z})",
-                life_value=self.life_value,
-                last_action=self.last_action or "无"
-            )
-        ))
 
     async def run(self, request: Optional[str] = None) -> str:
         """
@@ -338,15 +189,10 @@ class MachineAgent(MCPAgent):
 
             # 检查机器人是否仍然活跃
             try:
-                # 内部连接模式，直接查询世界管理器
-                if hasattr(self, '_internal_server'):
-                    machine_info = self._internal_server.world_manager.get_machine_info(self.machine_id)
-                    if not machine_info:
-                        return f"Machine {self.machine_id} 不活跃"
-                else:
-                    machine_info_result = await self.call_tool("mcp_python_get_machine_info", machine_id=self.machine_id)
-                    if "not found" in str(machine_info_result).lower():
-                        return f"Machine {self.machine_id} 不活跃"
+
+                machine_info_result = await self.call_tool("mcp_python_machine_get_self_status", machine_id=self.machine_id)
+                if "not found" in str(machine_info_result).lower():
+                    return f"Machine {self.machine_id} 不活跃"
             except Exception as e:
                 logger.warning(f"检查机器人状态失败: {e}")
 

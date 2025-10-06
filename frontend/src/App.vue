@@ -344,6 +344,8 @@ export default {
         // 添加随机参数避免缓存
         const response = await axios.get(`/mcp/machines?t=${Date.now()}`)
         let machines = response.data
+
+        // 第一层解析：HTTP响应 (字符串化的JSON)
         if (typeof machines === 'string') {
           try {
             machines = JSON.parse(machines)
@@ -351,6 +353,17 @@ export default {
             machines = {}
           }
         }
+
+        // 第二层解析：提取output中的实际数据
+        if (machines && machines.output && typeof machines.output === 'string') {
+          try {
+            machines = JSON.parse(machines.output)
+          } catch {
+            machines = {}
+          }
+        }
+
+        // 转换为数组格式
         if (machines && !Array.isArray(machines) && typeof machines === 'object') {
           machines = Object.values(machines)
         }
@@ -388,6 +401,8 @@ export default {
       try {
         const response = await axios.get('/mcp/obstacles')
         let obstacles = response.data
+
+        // 第一层解析：HTTP响应 (字符串化的JSON)
         if (typeof obstacles === 'string') {
           try {
             obstacles = JSON.parse(obstacles)
@@ -395,9 +410,21 @@ export default {
             obstacles = {}
           }
         }
+
+        // 第二层解析：提取output中的实际数据
+        if (obstacles && obstacles.output && typeof obstacles.output === 'string') {
+          try {
+            obstacles = JSON.parse(obstacles.output)
+          } catch {
+            obstacles = {}
+          }
+        }
+
+        // 转换为数组格式
         if (obstacles && !Array.isArray(obstacles) && typeof obstacles === 'object') {
           obstacles = Object.values(obstacles)
         }
+
         if (obstacles && Array.isArray(obstacles)) {
           this.obstacles = obstacles
         }

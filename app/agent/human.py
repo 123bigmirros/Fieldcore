@@ -13,9 +13,7 @@ from app.logger import logger
 from app.prompt.human import (
     SYSTEM_PROMPT,
     NEXT_STEP_PROMPT,
-    TASK_ANALYSIS_PROMPT,
     COMMAND_ERROR_PROMPT,
-    TASK_COMPLETION_PROMPT,
     MACHINE_DISCOVERY_PROMPT
 )
 
@@ -41,7 +39,6 @@ class HumanAgent(MCPAgent):
     # 移除了本地机器人管理，改为通过MCP工具获取
 
     # 执行状态跟踪（删除命令队列相关属性）
-    current_task: Optional[str] = None
 
     def __init__(self,
                  human_id: Optional[str] = None,
@@ -66,32 +63,44 @@ class HumanAgent(MCPAgent):
 
     async def initialize(self, **kwargs) -> None:
         """
-        直接初始化流程 - 连接到MCP服务器并创建机器人
+        初始化流程 - 连接到MCP服务器
         """
-        connection_type = kwargs.get("connection_type", "http_api")
+        # HTTP API连接
+        if not kwargs or kwargs.get("connection_type") == "http_api":
+            kwargs = {
+                "connection_type": "http_api",
+                "server_url": "http://localhost:8003"
+            }
 
-        if connection_type == "internal":
-            # 内部连接模式 - 直接使用服务器实例
-            server_instance = kwargs.get("server_instance")
-            if server_instance:
-                self.mcp_clients = {"internal": server_instance}
-                self.available_tools = list(server_instance.tools.keys())
-                logger.info(f"Human Commander {self.human_id} 使用内部连接模式")
-            else:
-                raise ValueError("Internal connection requires server_instance")
-        else:
-            # 外部连接模式
-            if not kwargs or connection_type == "http_api":
-                kwargs = {
-                    "connection_type": "http_api",
-                    "server_url": "http://localhost:8003"
-                }
-            # 初始化MCP连接
-            await super().initialize(**kwargs)
+        # 初始化MCP连接
+        await super().initialize(**kwargs)
 
-        # 机器人创建现在由外部调用 create_machine_at_position 来控制
+        # 动态添加工具信息到系统消息
+        await self._update_system_message_with_tool_details()
 
-        logger.info(f"✅ Human Commander {self.human_id} 初始化完成，MCP连接正常")
+        logger.info(f"✅ Human Commander {self.human_id} 初始化完成")
+
+    async def _update_system_message_with_tool_details(self) -> None:
+        """动态更新系统消息，添加工具信息"""
+        if not self.mcp_clients or not self.mcp_clients.tool_map:
+            return
+        # 生成工具列表，只显示Human Agent专用工具
+        tools_list = []
+        for tool_name, tool_info in self.mcp_clients.tool_map.items():
+            # 只显示以human_开头的工具
+            if tool_name.startswith('human_') or tool_name.startswith('mcp_python_human_'):
+                # 兼容两种工具格式：字典和HTTPMCPTool对象
+                if hasattr(tool_info, 'description'):
+                    description = tool_info.description
+                    tools_list.append(f"- {tool_name}: {description}")
+        tools_text = "\n".join(tools_list)
+        # 更新系统消息
+        if self.memory.messages and self.memory.messages[0].role == "system":
+            content = self.memory.messages[0].content
+            base_prompt = content.split("\n\nAvailable MCP tools:")[0]
+            new_content = f"{base_prompt}\n\n🔧 当前可用工具:\n{tools_text}"
+            from app.schema import Message
+            self.memory.messages[0] = Message.system_message(new_content)
 
     async def create_machine_at_position(self, machine_id: str, position: list) -> bool:
         """在指定位置创建单个机器人"""
@@ -121,57 +130,14 @@ class HumanAgent(MCPAgent):
 
     # 删除wait_for_command_completion方法 - 不再使用命令队列模式
 
-    async def get_machine_status(self, machine_id: str) -> dict:
-        """获取机器人状态"""
-        try:
-            result = await self.call_tool("mcp_python_get_machine_info", machine_id=machine_id)
-            # 从ToolResult中提取output
-            data = result.output if hasattr(result, 'output') else str(result)
-            return {"status": "success", "data": data}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+
 
     async def call_tool(self, tool_name: str, **kwargs) -> Any:
+        """调用工具，自动添加caller_id"""
         kwargs["caller_id"] = self.human_id
-        """重写call_tool方法以支持内部连接模式"""
-        # 添加调试日志
-        from app.logger import logger
-        logger.info(f"🎯 Human Agent {self.human_id} calling tool '{tool_name}' with caller_id='{kwargs.get('caller_id', 'NOT_SET')}')")
-        if "internal" in self.mcp_clients:
-            # 内部连接模式 - 直接调用服务器方法
-            server_instance = self.mcp_clients["internal"]
-            try:
-                result = await server_instance.server.call_tool(tool_name, kwargs)
-                return result
-            except Exception as e:
-                logger.error(f"Error calling tool '{tool_name}' internally: {e}")
-                raise
-        else:
-            # 外部连接模式 - 使用父类方法
-            return await super().call_tool(tool_name, **kwargs)
+        return await super().call_tool(tool_name, **kwargs)
 
-    async def get_all_machines(self) -> dict:
-        """获取所有机器人状态"""
-        try:
-            result = await self.call_tool("mcp_python_get_all_machines")
-            # 从ToolResult中提取output
-            data = result.output if hasattr(result, 'output') else str(result)
-            return {"status": "success", "data": data}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
 
-    async def analyze_task(self, task: str) -> None:
-        """分析任务并添加分析提示"""
-        from app.schema import Message
-        self.memory.add_message(Message.system_message(
-            TASK_ANALYSIS_PROMPT.format(task=task)
-        ))
-        self.current_task = task
-
-    async def complete_task_verification(self) -> None:
-        """添加任务完成验证提示"""
-        from app.schema import Message
-        self.memory.add_message(Message.system_message(TASK_COMPLETION_PROMPT))
 
     async def run(self, request: Optional[str] = None) -> str:
         """
@@ -180,28 +146,8 @@ class HumanAgent(MCPAgent):
         try:
             logger.info(f"🎯 Human Commander {self.human_id} 接收任务: {request}")
 
-            # 机器人信息直接通过MCP工具获取，无需缓存
-
-            # 分析任务
-            if request:
-                await self.analyze_task(request)
-
-            # 构建当前状态信息
-            status_info = "机器人由MCP服务器管理"
-
-            # 添加状态消息
-            from app.schema import Message
-            self.memory.add_message(Message.system_message(
-                f"🎯 当前任务状态：{status_info}\n"
-                f"📋 任务要求：{request}\n\n"
-                f"💡 请使用可用工具分析当前状态并执行任务。"
-            ))
-
             # 使用父类的智能执行
             result = await super().run(request)
-
-            # 任务完成后进行验证
-            await self.complete_task_verification()
 
             logger.info(f"✅ Human Commander {self.human_id} 任务完成")
             return result

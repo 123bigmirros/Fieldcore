@@ -75,7 +75,7 @@ def create_http_server(mcp_server):
         """获取所有机器信息"""
         try:
             # 通过MCP服务器获取所有机器信息
-            result = asyncio.run(mcp_server.server.call_tool('get_all_machines', {}))
+            result = asyncio.run(mcp_server.server.call_tool('human_get_all_machines', {}))
 
             # 处理返回值
             if isinstance(result, list):
@@ -94,7 +94,7 @@ def create_http_server(mcp_server):
         """获取特定机器信息"""
         try:
             # 通过MCP服务器获取特定机器信息
-            result = asyncio.run(mcp_server.server.call_tool('get_machine_info', {'machine_id': machine_id}))
+            result = asyncio.run(mcp_server.server.call_tool('human_get_machine_info', {'machine_id': machine_id}))
 
             # 处理返回值
             if isinstance(result, list):
@@ -108,39 +108,14 @@ def create_http_server(mcp_server):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/mcp/health', methods=['GET'])
-    def health_check():
-        """健康检查"""
-        try:
-            # 通过MCP服务器获取机器数量
-            result = asyncio.run(mcp_server.server.call_tool('get_all_machines', {}))
 
-            if isinstance(result, list):
-                content_str = ""
-                for content in result:
-                    if hasattr(content, 'text'):
-                        content_str += content.text
-
-                # 解析JSON获取机器数量
-                import json
-                machines_data = json.loads(content_str)
-                machine_count = len(machines_data)
-
-                return jsonify({
-                    'status': 'ok',
-                    'machine_count': machine_count
-                })
-            else:
-                return jsonify({'error': 'Failed to get health status'}), 500
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
 
     @app.route('/mcp/reset', methods=['POST'])
     def reset_world():
         """重置世界状态"""
         try:
             # 通过MCP服务器获取所有机器，然后逐个移除
-            result = asyncio.run(mcp_server.server.call_tool('get_all_machines', {}))
+            result = asyncio.run(mcp_server.server.call_tool('human_get_all_machines', {}))
 
             if isinstance(result, list):
                 content_str = ""
@@ -232,34 +207,7 @@ def create_http_server(mcp_server):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/mcp/collision/check', methods=['POST'])
-    def check_collision():
-        """检查碰撞"""
-        try:
-            data = request.get_json()
-            position = data.get('position', [0, 0, 0])
-            size = data.get('size', 1.0)
-            exclude_machine_id = data.get('exclude_machine_id')
 
-            params = {
-                'position': position,
-                'size': size
-            }
-            if exclude_machine_id:
-                params['exclude_machine_id'] = exclude_machine_id
-
-            result = asyncio.run(mcp_server.server.call_tool('check_collision', params))
-
-            if isinstance(result, list):
-                content_str = ""
-                for content in result:
-                    if hasattr(content, 'text'):
-                        content_str += content.text
-                return jsonify(content_str)
-            else:
-                return jsonify({'result': str(result)})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
 
     return app
 

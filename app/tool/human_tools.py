@@ -12,7 +12,7 @@ from app.tool.base import BaseTool, ToolResult
 class ControlMachineTool(BaseTool):
     """Tool for controlling machines through text commands."""
 
-    name: str = "control_machine"
+    name: str = "human_control_machine"
     description: str = "Send text commands to a machine for execution."
     parameters: dict = {
         "type": "object",

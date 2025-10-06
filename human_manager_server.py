@@ -138,7 +138,6 @@ def create_app():
             for human_id, human in HUMAN_MANAGERS.items():
                 humans_info[human_id] = {
                     'human_id': human_id,
-                    'current_task': human.current_task,
                     'message': 'Machines are managed by MCP server'
                 }
 
