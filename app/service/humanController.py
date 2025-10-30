@@ -94,8 +94,7 @@ class HumanController:
                     try:
                         await human.call_tool("mcp_python_register_machine_control", machine_id=machine_id)
                         created_count += 1
-                        logger.info(f"🤖 为 {human_id} 创建机器人 {machine_id} 在位置 {position}")
-                        logger.info(f"✅ 注册机器人 {machine_id} 到MCP控制系统 (owner: {human_id})")
+
                     except Exception as e:
                         logger.error(f"❌ 注册机器人 {machine_id} 失败: {e}")
                 else:

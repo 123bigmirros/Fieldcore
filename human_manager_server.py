@@ -10,7 +10,6 @@ import sys
 import os
 import threading
 
-# 确保正确的Python路径 - 与test_human_machine_lineup_simple.py一致
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, jsonify, request

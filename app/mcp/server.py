@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 
 from app.logger import logger
 from app.tool.base import BaseTool
-from app.tool.human_tools import ControlMachineTool
+from app.tool.human_tools import SendShortCommandTool, SendLongCommandTool
 from app.tool.machine_tools import CheckEnvironmentTool, StepMovementTool, LaserAttackTool, GetSelfStatusTool
 from app.agent.world_manager import WorldManager, Position
 from app.agent.machine import MachineAgent
@@ -104,7 +104,8 @@ class MCPServer:
 
         # Initialize human tools (只有Human Agent可以使用)
         self.human_tools = {
-            "human_control_machine": ControlMachineTool(mcp_server=self)
+            "human_send_short_command": SendShortCommandTool(mcp_server=self),
+            "human_send_long_command": SendLongCommandTool(mcp_server=self)
         }
 
         # Initialize machine tools (只有Machine Agent可以使用)
@@ -140,8 +141,6 @@ class MCPServer:
             if hasattr(tool, 'set_world_manager'):
                 tool.set_world_manager(self.world_manager)
 
-        # world工具已经直接使用world_manager单例，不需要额外设置
-
         # 将工具添加到主工具字典中，但标记其类型
         for name, tool in self.human_tools.items():
             self.tools[name] = tool
@@ -156,7 +155,6 @@ class MCPServer:
             self.tools[name] = tool
             # world工具不设置agent_type，使其通用
 
-        # World state management tools are registered directly in register_all_tools()
 
         # 设置全局实例引用用于RQ任务
         global _mcp_server_instance
@@ -390,10 +388,6 @@ class MCPServer:
         if self.redis_conn:
             self.redis_conn.close()
             logger.info("Redis connection closed")
-
-        # Clean up control machine tool registry
-        if "human_control_machine" in self.tools and hasattr(self.tools["human_control_machine"], "machine_registry"):
-            self.tools["human_control_machine"].machine_registry.clear()
 
     def register_all_tools(self) -> None:
         """Register all tools with the server."""

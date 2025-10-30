@@ -9,46 +9,27 @@ from app.agent.world_manager import world_manager
 from app.tool.base import BaseTool, ToolResult
 
 
-class ControlMachineTool(BaseTool):
-    """Tool for controlling machines through text commands."""
+class BaseMachineControlTool(BaseTool):
+    """基础机器人控制工具类，提供共享的验证和执行逻辑"""
 
-    name: str = "human_control_machine"
-    description: str = "Send text commands to a machine for execution."
-    parameters: dict = {
-        "type": "object",
-        "properties": {
-            "machine_id": {
-                "type": "string",
-                "description": "The ID of the machine to control",
-            },
-            "command": {
-                "type": "string",
-                "description": "The text command to send to the machine",
-            },
-            "offline": {
-                "type": "boolean",
-                "description": "Whether to execute offline (true: fire-and-forget, false: wait for completion)",
-                "default": False
-            },
-            "caller_id": {
-                "type": "string",
-                "description": "ID of the human agent calling this tool (automatically injected)",
-                "default": ""
-            },
-        },
-        "required": ["machine_id", "command"],
-    }
-
-    def __init__(self, machine_registry: Optional[Dict[str, Any]] = None, mcp_server: Optional[Any] = None):
+    def __init__(self, mcp_server: Optional[Any] = None):
         super().__init__()
         # MCP server reference for direct Machine Agent access
         object.__setattr__(self, '_mcp_server', mcp_server)
 
-    async def execute(self, machine_id: str, command: str, offline: bool = False, caller_id: str = "", **kwargs) -> ToolResult:
-        """Execute machine control command."""
+    async def _validate_and_execute(
+        self,
+        machine_id: str,
+        command: str,
+        offline: bool,
+        caller_id: str = "",
+        **kwargs
+    ) -> ToolResult:
+        """验证机器人状态并执行命令的共享逻辑"""
         try:
             from app.logger import logger
-            logger.info(f"🔧 ControlMachineTool.execute called with caller_id: '{caller_id}' for machine: {machine_id}")
+            mode = "async" if offline else "sync"
+            logger.info(f"🔧 {self.name} called ({mode} mode) with caller_id: '{caller_id}' for machine: {machine_id}")
 
             # Check if machine exists in world
             machine_info = world_manager.get_machine_info(machine_id)
@@ -70,26 +51,26 @@ class ControlMachineTool(BaseTool):
                 )
 
             # 通过RQ队列控制机器人
-            result = self._direct_control(machine_id, command, offline=offline, caller_id=caller_id)
+            result = self._enqueue_command(machine_id, command, offline=offline, caller_id=caller_id)
 
             return ToolResult(output=result)
 
         except Exception as e:
             return ToolResult(error=f"Machine control failed: {str(e)}")
 
-    def _direct_control(self, machine_id: str, command: str, offline: bool = False, caller_id: str = "") -> str:
+    def _enqueue_command(self, machine_id: str, command: str, offline: bool, caller_id: str = "") -> str:
         """
         通过RQ消息队列控制机器人
 
         Args:
             machine_id: 机器人ID
             command: 命令内容
-            offline: 是否离线执行（True=火拼即忘，False=等待完整执行结果）
+            offline: 是否离线执行（True=异步，False=同步等待）
             caller_id: 调用者ID
         """
         try:
             from app.logger import logger
-            logger.info(f"🚀 _direct_control called with caller_id: '{caller_id}' for machine: {machine_id}")
+            logger.info(f"🚀 Enqueueing command (offline={offline}) for machine {machine_id}")
 
             # 获取MCP服务器引用
             mcp_server = getattr(self, '_mcp_server', None)
@@ -97,14 +78,92 @@ class ControlMachineTool(BaseTool):
             if mcp_server:
                 if offline:
                     # 离线模式：仅确认命令已发送给机器人，不等待结果
-                    job_id = mcp_server.enqueue_command(machine_id, command, offline=offline, human_id=caller_id)
-                    return f"Command sent to machine {machine_id}: '{command}' - executing offline (job_id: {job_id})"
+                    job_id = mcp_server.enqueue_command(machine_id, command, offline=True, human_id=caller_id)
+                    return f"✅ Long-term command queued for machine {machine_id}: '{command}' (job_id: {job_id}). The machine will execute this task in the background."
                 else:
                     # 在线模式：等待机器人完整执行ReAct过程并返回结果
-                    result = mcp_server.enqueue_command(machine_id, command, offline=offline, human_id=caller_id)
-                    return f"Machine {machine_id} completed: {result}"
+                    result = mcp_server.enqueue_command(machine_id, command, offline=False, human_id=caller_id)
+                    return f"✅ Machine {machine_id} completed short-term command. Result: {result}"
             else:
-                return f"MCP server not available for machine {machine_id}"
+                return f"❌ MCP server not available for machine {machine_id}"
 
         except Exception as e:
-            return f"Failed to queue command for {machine_id}: {str(e)}"
+            return f"❌ Failed to queue command for {machine_id}: {str(e)}"
+
+
+class SendShortCommandTool(BaseMachineControlTool):
+    """发送短期命令工具 - 同步执行，等待完成返回结果"""
+
+    name: str = "human_send_short_command"
+    description: str = """Send a short-term command to a machine and wait for completion.
+Use this for quick tasks that should complete within seconds (e.g., check status, move one step, quick scan).
+The tool will block until the machine finishes executing and returns the result."""
+
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "machine_id": {
+                "type": "string",
+                "description": "The ID of the machine to control",
+            },
+            "command": {
+                "type": "string",
+                "description": "The short-term command to send (e.g., 'check your status', 'move forward one step')",
+            },
+            "caller_id": {
+                "type": "string",
+                "description": "ID of the human agent calling this tool (automatically injected)",
+                "default": ""
+            },
+        },
+        "required": ["machine_id", "command"],
+    }
+
+    async def execute(self, machine_id: str, command: str, caller_id: str = "", **kwargs) -> ToolResult:
+        """执行短期命令 - 同步等待完成"""
+        return await self._validate_and_execute(
+            machine_id=machine_id,
+            command=command,
+            offline=False,  # 短期命令使用同步模式
+            caller_id=caller_id,
+            **kwargs
+        )
+
+
+class SendLongCommandTool(BaseMachineControlTool):
+    """发送长期命令工具 - 异步执行，立即返回任务ID"""
+
+    name: str = "human_send_long_command"
+    description: str = """Send a long-term command to a machine for asynchronous execution.
+Use this for complex or time-consuming tasks (e.g., 'explore the area', 'patrol for 10 minutes', 'search for targets').
+The tool will return immediately with a job_id, and the machine will execute the task in the background."""
+
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "machine_id": {
+                "type": "string",
+                "description": "The ID of the machine to control",
+            },
+            "command": {
+                "type": "string",
+                "description": "The long-term command to send (e.g., 'patrol the perimeter', 'search for enemies')",
+            },
+            "caller_id": {
+                "type": "string",
+                "description": "ID of the human agent calling this tool (automatically injected)",
+                "default": ""
+            },
+        },
+        "required": ["machine_id", "command"],
+    }
+
+    async def execute(self, machine_id: str, command: str, caller_id: str = "", **kwargs) -> ToolResult:
+        """执行长期命令 - 异步执行，立即返回"""
+        return await self._validate_and_execute(
+            machine_id=machine_id,
+            command=command,
+            offline=True,  # 长期命令使用异步模式
+            caller_id=caller_id,
+            **kwargs
+        )

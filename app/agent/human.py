@@ -36,9 +36,7 @@ class HumanAgent(MCPAgent):
     # Human特有属性
     human_id: str = Field(default_factory=lambda: f"commander_{uuid.uuid4().hex[:8]}")
 
-    # 移除了本地机器人管理，改为通过MCP工具获取
 
-    # 执行状态跟踪（删除命令队列相关属性）
 
     def __init__(self,
                  human_id: Optional[str] = None,
@@ -122,13 +120,6 @@ class HumanAgent(MCPAgent):
             logger.error(f"创建机器人 {machine_id} 失败: {e}")
             return False
 
-    # 删除_find_safe_positions方法 - 这个复杂逻辑应该移到工具层
-
-    # 删除_register_machines_to_control_tool方法 - 不需要手动注册
-
-    # 删除send_command_to_machine方法 - 不再使用命令队列模式
-
-    # 删除wait_for_command_completion方法 - 不再使用命令队列模式
 
 
 
