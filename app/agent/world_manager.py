@@ -4,7 +4,7 @@ Global world manager for tracking machine positions and world state.
 
 import asyncio
 import random
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from threading import Lock
 import time
@@ -86,6 +86,7 @@ class MachineInfo:
     last_action: Optional[str] = None
     size: float = 1.0  # machine size (radius for collision detection)
     facing_direction: Tuple[float, float] = (1.0, 0.0)  # facing direction (x, y)
+    view_size: int = 3  # square visibility range (odd number)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -98,7 +99,8 @@ class MachineInfo:
             'status': self.status,
             'last_action': self.last_action,
             'size': self.size,
-            'facing_direction': list(self.facing_direction)
+            'facing_direction': list(self.facing_direction),
+            'view_size': self.view_size,
         }
 
     @classmethod
@@ -113,7 +115,8 @@ class MachineInfo:
             status=data.get('status', 'active'),
             last_action=data.get('last_action'),
             size=data.get('size', 1.0),
-            facing_direction=tuple(data.get('facing_direction', [1.0, 0.0]))
+            facing_direction=tuple(data.get('facing_direction', [1.0, 0.0])),
+            view_size=int(data.get('view_size', 3)),
         )
 
 
@@ -162,8 +165,13 @@ class WorldManager:
 
     def register_machine(self, machine_id: str, position: Position,
                         life_value: int = 10, machine_type: str = "generic", size: float = 1.0,
-                        facing_direction: Tuple[float, float] = (1.0, 0.0), owner: str = "") -> None:
+                        facing_direction: Tuple[float, float] = (1.0, 0.0), owner: str = "",
+                        view_size: int = 3) -> None:
         """Register a new machine in the world."""
+        normalized_view_size = max(1, int(view_size))
+        if normalized_view_size % 2 == 0:
+            normalized_view_size += 1  # Ensure odd dimension for centered map
+
         machine_info = MachineInfo(
             machine_id=machine_id,
             position=position,
@@ -171,7 +179,8 @@ class WorldManager:
             machine_type=machine_type,
             owner=owner,
             size=size,
-            facing_direction=facing_direction
+            facing_direction=facing_direction,
+            view_size=normalized_view_size,
         )
 
         # Load current state
@@ -180,6 +189,17 @@ class WorldManager:
 
         # Save updated state
         self._save_world_state(machines)
+        try:
+            from app.service.map_manager import map_manager
+            map_manager.register_machine(
+                machine_id,
+                (
+                    position.coordinates[0],
+                    position.coordinates[1] if len(position.coordinates) > 1 else 0.0,
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"⚠️ Map manager registration failed for {machine_id}: {exc}")
 
     def check_collision(self, position: Position, size: float = 1.0, exclude_machine_id: str = None) -> bool:
         """
@@ -356,6 +376,79 @@ class WorldManager:
                     nearby.append(MachineInfo.from_dict(other_data))
 
         return nearby
+
+    def get_machine_view(self, machine_id: str) -> Optional[Dict[str, Any]]:
+        """Return an n×n grid view centered on the specified machine."""
+        machines = self._load_world_state()
+        machine_data = machines.get(machine_id)
+        if not machine_data:
+            return None
+
+        machine_info = MachineInfo.from_dict(machine_data)
+        center = machine_info.position
+        center_x = int(round(center.coordinates[0]))
+        center_y = int(round(center.coordinates[1] if len(center.coordinates) > 1 else 0.0))
+        view_size = max(1, machine_info.view_size or 3)
+        if view_size % 2 == 0:
+            view_size += 1
+        half_range = view_size // 2
+
+        obstacles = self._load_obstacles_state()
+        obstacle_lookup: Dict[Tuple[int, int], dict] = {}
+        for obstacle in obstacles.values():
+            pos = obstacle['position']
+            ox = int(round(pos[0]))
+            oy = int(round(pos[1] if len(pos) > 1 else 0.0))
+            obstacle_lookup[(ox, oy)] = obstacle
+
+        machine_lookup: Dict[Tuple[int, int], dict] = {}
+        for other_id, other_data in machines.items():
+            pos = other_data['position']
+            mx = int(round(pos[0]))
+            my = int(round(pos[1] if len(pos) > 1 else 0.0))
+            entry = dict(other_data)
+            entry['machine_id'] = other_id
+            machine_lookup[(mx, my)] = entry
+
+        rows: List[List[Dict[str, Any]]] = []
+        for y_offset in range(half_range, -half_range - 1, -1):
+            row: List[Dict[str, Any]] = []
+            for x_offset in range(-half_range, half_range + 1):
+                abs_x = center_x + x_offset
+                abs_y = center_y + y_offset
+                key = (abs_x, abs_y)
+
+                cell: Dict[str, Any] = {
+                    "x": abs_x,
+                    "y": abs_y,
+                    "terrain": "empty",
+                }
+
+                if key in obstacle_lookup:
+                    obstacle = obstacle_lookup[key]
+                    cell["terrain"] = "obstacle"
+                    cell["obstacle_id"] = obstacle.get("obstacle_id")
+                elif key in machine_lookup:
+                    occupant = machine_lookup[key]
+                    is_self = occupant["machine_id"] == machine_id
+                    cell["terrain"] = "self" if is_self else "machine"
+                    cell["machine_id"] = occupant["machine_id"]
+                    if not is_self:
+                        cell["machine_type"] = occupant.get("machine_type")
+                        cell["status"] = occupant.get("status")
+                else:
+                    cell["terrain"] = "empty"
+
+                row.append(cell)
+            rows.append(row)
+
+        return {
+            "machine_id": machine_id,
+            "center": [center_x, center_y],
+            "view_size": view_size,
+            "cells": rows,
+            "generated_at": time.time(),
+        }
 
     def get_all_machines(self) -> Dict[str, MachineInfo]:
         """Get all registered machines."""

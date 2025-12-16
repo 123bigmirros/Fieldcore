@@ -6,14 +6,15 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from app.agent.mcp import MCPAgent
 from app.agent.world_manager import Position
 from app.logger import logger
 from app.schema import AgentState
+from app.service.map_manager import map_manager
 from app.prompt.machine import (
     SYSTEM_PROMPT,
     NEXT_STEP_PROMPT,
@@ -59,6 +60,9 @@ class MachineAgent(MCPAgent):
     # 执行状态跟踪（保留基本属性）
     command_history: List[Dict[str, Any]] = Field(default_factory=list)
     last_action: Optional[str] = None
+    local_map: Dict[str, Any] = Field(default_factory=dict)
+
+    _map_manager: Any = PrivateAttr(default_factory=lambda: map_manager)
 
     def __init__(self,
                  machine_id: Optional[str] = None,
@@ -89,6 +93,11 @@ class MachineAgent(MCPAgent):
         self.size = size
 
         logger.info(f"🤖 Smart Machine {self.machine_id} 已创建 at {self.location} (size: {self.size})")
+        self._map_manager.register_machine(
+            self.machine_id,
+            self._extract_xy_from_position(self.location),
+        )
+        self.refresh_local_map()
 
     async def initialize(self, **kwargs) -> None:
         """
@@ -174,6 +183,18 @@ class MachineAgent(MCPAgent):
         # 调用父类方法
         return super()._should_finish_execution(name, **kwargs)
 
+    def refresh_local_map(self) -> None:
+        """同步机器人的本地地图快照。"""
+        self.local_map = self._map_manager.get_machine_map_snapshot(self.machine_id)
+
+    @staticmethod
+    def _extract_xy_from_position(position: Position) -> Tuple[float, float]:
+        """从Position对象中提取平面坐标。"""
+        coords = position.coordinates
+        x_coord = float(coords[0]) if coords else 0.0
+        y_coord = float(coords[1]) if len(coords) > 1 else 0.0
+        return x_coord, y_coord
+
 
 
     async def run(self, request: Optional[str] = None) -> str:
@@ -186,6 +207,8 @@ class MachineAgent(MCPAgent):
                 logger.warning(f"Machine {self.machine_id} 状态从 {self.state} 重置为 IDLE")
                 self.state = AgentState.IDLE
                 self.current_step = 0  # 重置步数计数器
+
+            self.refresh_local_map()
 
             # 检查机器人是否仍然活跃
             try:
@@ -209,6 +232,7 @@ class MachineAgent(MCPAgent):
 
             # 使用父类MCP agent执行
             result = await super().run(request)
+            self.refresh_local_map()
             return result
 
         except Exception as e:

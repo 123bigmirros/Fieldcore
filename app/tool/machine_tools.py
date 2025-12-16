@@ -4,9 +4,11 @@ Tools specific to Machine agents for environment interaction and movement.
 
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.agent.world_manager import Position, world_manager
+from app.logger import logger
+from app.service.map_manager import MapObservation, map_manager
 from app.tool.base import BaseTool, ToolResult
 
 
@@ -201,7 +203,24 @@ class StepMovementTool(BaseTool):
 
         # 成功完成移动
         world_manager.update_machine_action(machine_id, f"moved_to_{current_pos}")
+        self._record_map_observation(machine_id)
         return ToolResult(output=f"Machine {machine_id} successfully moved to {current_pos} in {steps_taken} units")
+
+    def _record_map_observation(self, machine_id: str) -> None:
+        """Fetch latest view for the machine and push to map manager."""
+        try:
+            view_payload = world_manager.get_machine_view(machine_id)
+            if not view_payload:
+                return
+            center = view_payload.get("center", [0, 0])
+            observation = MapObservation(
+                machine_id=machine_id,
+                position=(int(center[0]), int(center[1])),
+                view=view_payload.get("cells", []),
+            )
+            map_manager.submit_observation(observation)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.error("Failed to record map observation for %s: %s", machine_id, exc)
 
 
 class MachineActionTool(BaseTool):

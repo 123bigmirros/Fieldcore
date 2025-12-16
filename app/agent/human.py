@@ -4,12 +4,13 @@ Human Agent - 智能指挥官，负责分解任务并协调多个机器人完成
 
 import json
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from app.agent.mcp import MCPAgent
 from app.logger import logger
+from app.service.map_manager import map_manager
 from app.prompt.human import (
     SYSTEM_PROMPT,
     NEXT_STEP_PROMPT,
@@ -35,6 +36,9 @@ class HumanAgent(MCPAgent):
 
     # Human特有属性
     human_id: str = Field(default_factory=lambda: f"commander_{uuid.uuid4().hex[:8]}")
+    global_map: Dict[str, Any] = Field(default_factory=dict)
+
+    _map_manager: Any = PrivateAttr(default_factory=lambda: map_manager)
 
 
 
@@ -58,6 +62,7 @@ class HumanAgent(MCPAgent):
         self.machine_count = machine_count
 
         logger.info(f"🤖 Human Commander {self.human_id} 已创建")
+        self.refresh_global_map()
 
     async def initialize(self, **kwargs) -> None:
         """
@@ -115,6 +120,8 @@ class HumanAgent(MCPAgent):
                 owner=self.human_id
             )
             logger.info(f"  ✅ 创建机器人: {machine_id} 在位置 {position}")
+            self._map_manager.register_machine(machine_id, self._extract_xy(position))
+            self.refresh_global_map()
             return True
         except Exception as e:
             logger.error(f"创建机器人 {machine_id} 失败: {e}")
@@ -136,11 +143,13 @@ class HumanAgent(MCPAgent):
         """
         try:
             logger.info(f"🎯 Human Commander {self.human_id} 接收任务: {request}")
+            self.refresh_global_map()
 
             # 使用父类的智能执行
             result = await super().run(request)
 
             logger.info(f"✅ Human Commander {self.human_id} 任务完成")
+            self.refresh_global_map()
             return result
 
         except Exception as e:
@@ -156,4 +165,15 @@ class HumanAgent(MCPAgent):
         # 不做任何实际清理，避免自动删除机器人
         pass
 
+    def refresh_global_map(self) -> None:
+        """刷新全局地图快照供Human Agent使用。"""
+        self.global_map = self._map_manager.get_global_map_snapshot()
 
+    @staticmethod
+    def _extract_xy(position: List[float]) -> Tuple[float, float]:
+        """从输入位置中提取平面坐标。"""
+        if not position:
+            return 0.0, 0.0
+        x_coord = float(position[0])
+        y_coord = float(position[1]) if len(position) > 1 else 0.0
+        return x_coord, y_coord
