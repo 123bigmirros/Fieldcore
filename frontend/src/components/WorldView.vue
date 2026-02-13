@@ -30,6 +30,9 @@
       <!-- 网格辅助线 -->
       <div v-if="showGrid" class="grid-overlay"></div>
     </div>
+
+    <!-- 命令面板 -->
+    <CommandPanel :human-id="humanId" />
   </div>
 </template>
 
@@ -37,6 +40,7 @@
 import { computed } from 'vue'
 import GameObject from './GameObject.vue'
 import LaserBeam from './LaserBeam.vue'
+import CommandPanel from './CommandPanel.vue'
 
 const props = defineProps({
   machines: Array,
@@ -45,7 +49,8 @@ const props = defineProps({
   transformer: Object,
   isPositionVisible: Function,
   showGrid: Boolean,
-  myMachines: Array
+  myMachines: Array,
+  humanId: String
 })
 
 const visibleMachines = computed(() =>

@@ -4,14 +4,16 @@
       <h2>🤖 OpenManus 智能管理系统</h2>
       <div class="login-form">
         <input
-          v-model="inputHumanId"
+          :value="inputHumanId"
+          @input="emit('update:inputHumanId', $event.target.value)"
           type="text"
           placeholder="请输入Human ID"
           @keyup.enter="onSubmit"
           class="human-id-input"
         />
         <input
-          v-model="machineCount"
+          :value="machineCount"
+          @input="emit('update:machineCount', Number($event.target.value))"
           type="number"
           placeholder="机器人数量"
           min="1"

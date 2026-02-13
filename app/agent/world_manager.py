@@ -571,7 +571,7 @@ class WorldManager:
 
         # 创建外围正方形障碍物 (边长约30单位，无间隙)
         wall_size = 15
-        wall_thickness = 1.5  # 增加障碍物厚度，确保无法穿越
+        wall_thickness = 1.0  # 障碍物大小：1.0 = 一个格子
 
         obstacles = []
 

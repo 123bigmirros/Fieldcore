@@ -4,6 +4,7 @@ Human Agent - 智能指挥官，负责分解任务并协调多个机器人完成
 
 import json
 import uuid
+import requests
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import Field, PrivateAttr
@@ -17,6 +18,9 @@ from app.prompt.human import (
     COMMAND_ERROR_PROMPT,
     MACHINE_DISCOVERY_PROMPT
 )
+
+# MCP 服务器地址（world_service 由 run_mcp_server.py 维护）
+MCP_SERVER_URL = "http://localhost:8003"
 
 
 class HumanAgent(MCPAgent):
@@ -108,21 +112,32 @@ class HumanAgent(MCPAgent):
     async def create_machine_at_position(self, machine_id: str, position: list) -> bool:
         """在指定位置创建单个机器人"""
         try:
-            # 注册机器人到MCP服务器
-            result = await self.call_tool(
-                "mcp_python_register_machine",
-                machine_id=machine_id,
-                position=position,
-                life_value=10,
-                machine_type="worker",
-                size=1.0,
-                facing_direction=[1.0, 0.0],
-                owner=self.human_id
+            # 通过 HTTP API 注册机器人到 MCP 服务器
+            resp = requests.post(
+                f"{MCP_SERVER_URL}/mcp/machines",
+                json={
+                    "machine_id": machine_id,
+                    "position": position,
+                    "life_value": 10,
+                    "machine_type": "worker",
+                    "size": 1.0,
+                    "facing_direction": [1.0, 0.0],
+                    "owner": self.human_id,
+                    "view_size": 3
+                },
+                timeout=5
             )
-            logger.info(f"  ✅ 创建机器人: {machine_id} 在位置 {position}")
-            self._map_manager.register_machine(machine_id, self._extract_xy(position))
-            self.refresh_global_map()
-            return True
+            result = resp.json()
+
+            if result.get('success'):
+                logger.info(f"  ✅ 创建机器人: {machine_id} 在位置 {position}")
+                self._map_manager.register_machine(machine_id, self._extract_xy(position))
+                self.refresh_global_map()
+                return True
+            else:
+                logger.error(f"创建机器人 {machine_id} 失败: {result.get('error', 'Unknown error')}")
+                return False
+
         except Exception as e:
             logger.error(f"创建机器人 {machine_id} 失败: {e}")
             return False

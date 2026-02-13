@@ -5,7 +5,7 @@ Tools specific to Human agents for controlling and coordinating machines.
 import json
 from typing import Any, Dict, List, Optional
 
-from app.agent.world_manager import world_manager
+from app.service.world_service import world_service
 from app.tool.base import BaseTool, ToolResult
 
 
@@ -31,23 +31,23 @@ class BaseMachineControlTool(BaseTool):
             mode = "async" if offline else "sync"
             logger.info(f"🔧 {self.name} called ({mode} mode) with caller_id: '{caller_id}' for machine: {machine_id}")
 
-            # Check if machine exists in world
-            machine_info = world_manager.get_machine_info(machine_id)
+            # Check if machine exists in world through world_service
+            machine_info = world_service.get_machine_info(machine_id)
             if not machine_info:
                 return ToolResult(
                     error=f"Machine {machine_id} not found in world registry"
                 )
 
             # Check ownership if caller_id is provided
-            if caller_id and machine_info.owner and machine_info.owner != caller_id:
+            if caller_id and machine_info["owner"] and machine_info["owner"] != caller_id:
                 return ToolResult(
-                    error=f"Access denied: Machine {machine_id} belongs to {machine_info.owner}, not {caller_id}"
+                    error=f"Access denied: Machine {machine_id} belongs to {machine_info['owner']}, not {caller_id}"
                 )
 
             # Check if machine is active
-            if machine_info.status != "active":
+            if machine_info["status"] != "active":
                 return ToolResult(
-                    error=f"Machine {machine_id} is not active (status: {machine_info.status})"
+                    error=f"Machine {machine_id} is not active (status: {machine_info['status']})"
                 )
 
             # 通过RQ队列控制机器人

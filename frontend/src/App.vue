@@ -21,35 +21,9 @@
         :is-position-visible="viewport.isPositionVisible"
         :show-grid="keyboard.showGrid.value"
         :my-machines="worldData.myMachines.value"
-      />
-
-      <!-- 状态面板 -->
-      <StatusPanel
         :human-id="auth.humanId.value"
-        :machine-count="worldData.machines.value.length"
-        :obstacle-count="worldData.obstacles.value.length"
-        @exit="handleExit"
       />
 
-      <!-- 视野中心控制器 -->
-      <ViewCenterController
-        :machines="worldData.machines.value"
-        :human-id="auth.humanId.value"
-        @view-center-changed="handleViewCenterChanged"
-        @focus-machine="handleFocusMachine"
-        @reset-view-center="handleResetViewCenter"
-        @show-message="handleShowMessage"
-      />
-
-      <!-- 指令输入框 -->
-      <CommandInput
-        :show="command.showCommandInput.value"
-        v-model:command="command.currentCommand.value"
-        :is-sending="command.isSendingCommand.value"
-        :error="command.commandError.value"
-        @send="command.sendCommand"
-        @close="command.closeCommandInput"
-      />
     </div>
   </div>
 </template>
@@ -58,22 +32,17 @@
 import { watch, onBeforeUnmount } from 'vue'
 import LoginView from './components/LoginView.vue'
 import WorldView from './components/WorldView.vue'
-import StatusPanel from './components/StatusPanel.vue'
-import CommandInput from './components/CommandInput.vue'
-import ViewCenterController from './components/ViewCenterController.vue'
 
 import { useAuth } from './composables/useAuth'
 import { useWorldData } from './composables/useWorldData'
 import { useViewport } from './composables/useViewport'
 import { useLaser } from './composables/useLaser'
-import { useCommand } from './composables/useCommand'
 import { useKeyboard } from './composables/useKeyboard'
 
 // 状态管理
 const auth = useAuth()
 const worldData = useWorldData(auth.humanId)
 const viewport = useViewport()
-const command = useCommand(auth.humanId)
 const laser = useLaser(
   worldData.machines,
   viewport.addLaserVision,
@@ -83,11 +52,6 @@ const laser = useLaser(
 // 键盘控制
 const keyboard = useKeyboard({
   onDebug: showDebugInfo,
-  onSpace: () => {
-    if (auth.humanId.value && !command.showCommandInput.value) {
-      command.handleSpaceKey()
-    }
-  },
   onResize: forceUpdate
 })
 
@@ -102,36 +66,6 @@ async function handleLogin() {
   if (success) {
     worldData.startAutoRefresh()
   }
-}
-
-async function handleExit() {
-  worldData.stopAutoRefresh()
-  await auth.exitSystem()
-
-  // 重置状态
-  worldData.machines.value = []
-  worldData.obstacles.value = []
-  laser.activeLasers.value = []
-  laser.shownAttacks.value = []
-  viewport.resetView()
-  viewport.laserVisionAreas.value = []
-}
-
-function handleViewCenterChanged(data) {
-  viewport.updateViewCenter(data.offset, data.rotation)
-}
-
-function handleFocusMachine(data) {
-  const rotationDegrees = (data.rotation * 180 / Math.PI).toFixed(1)
-  console.log(`🎯 聚焦到机器人: ${data.machineId} 位置: (${data.position[0]}, ${data.position[1]}), 旋转: ${rotationDegrees}°`)
-}
-
-function handleResetViewCenter() {
-  console.log(`🏠 视野中心已重置`)
-}
-
-function handleShowMessage(message) {
-  console.log(`📢 消息: ${message.message}`)
 }
 
 function forceUpdate() {

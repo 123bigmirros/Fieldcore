@@ -8,7 +8,7 @@ export const CONFIG = {
     SPACE_KEY_TIMEOUT: 500,  // 双击空格超时（毫秒）
     MESSAGE_DURATION: 3000,  // 消息显示时长（毫秒）
     API_BASE_URL: 'http://localhost:8004',
-    MCP_BASE_URL: '/mcp'
+    MCP_BASE_URL: 'http://localhost:8004/mcp'  // 修改：直接指向 8004 端口
 }
 
 // 默认值
