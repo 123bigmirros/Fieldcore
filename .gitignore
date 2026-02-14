@@ -204,3 +204,13 @@ node_modules
 # Runtime files
 .server_pids
 .jukit/
+dump.rdb
+
+# Personal / local-only
+todo_list.md
+CLAUDE.md
+run_mcp.py
+/package.json
+
+# IDE
+.vscode/settings.json
