@@ -204,3 +204,8 @@ node_modules
 # Runtime files
 .server_pids
 .jukit/
+dump.rdb
+todo_list.md
+
+# IDE
+.vscode/settings.json
