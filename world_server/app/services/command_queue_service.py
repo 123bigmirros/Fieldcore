@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Command Queue Service - 命令队列服务
+Command Queue Service
 
-为每个 machine 维护命令队列，使用后台线程执行命令
+Maintains a command queue per machine, executed by a background thread
 """
 
 import time
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class CommandQueueService:
-    """命令队列服务 - 单例"""
+    """Command queue service - singleton"""
 
     _instance: Optional["CommandQueueService"] = None
 
@@ -29,38 +29,38 @@ class CommandQueueService:
         if hasattr(self, '_initialized'):
             return
 
-        # 为每个 machine_id 维护一个命令队列（主线程创建/删除，消费者线程只读）
+        # Command queue per machine_id (created/deleted by main thread, read-only by consumer thread)
         self._queues: Dict[str, RingBuffer] = {}
 
-        # 消费者线程控制
+        # Consumer thread control
         self._running = False
         self._consumer_thread: Optional[threading.Thread] = None
 
-        # 命令执行回调函数（由 world_service 提供）
+        # Command execution callback (provided by world_service)
         self._execute_callback = None
 
-        # 配置
+        # Configuration
         self.buffer_capacity = 100
         self.poll_interval = 0.1
 
         self._initialized = True
 
     def set_execute_callback(self, callback):
-        """设置命令执行回调函数"""
+        """Set the command execution callback"""
         self._execute_callback = callback
 
     def create_queue(self, machine_id: str):
-        """为 machine 创建命令队列（仅主线程调用）"""
+        """Create a command queue for a machine (main thread only)"""
         if machine_id not in self._queues:
             self._queues[machine_id] = RingBuffer(self.buffer_capacity)
 
     def remove_queue(self, machine_id: str):
-        """移除 machine 的命令队列（仅主线程调用）"""
+        """Remove a machine's command queue (main thread only)"""
         if machine_id in self._queues:
             del self._queues[machine_id]
 
     def enqueue_command(self, machine_id: str, action: str, params: dict) -> bool:
-        """将命令添加到队列（生产者接口，仅主线程调用）"""
+        """Add a command to the queue (producer interface, main thread only)"""
         if machine_id not in self._queues:
             return False
 
@@ -69,7 +69,7 @@ class CommandQueueService:
         return queue.put(command)
 
     def start_consumer(self):
-        """启动消费者线程"""
+        """Start the consumer thread"""
         if self._running:
             return
 
@@ -82,7 +82,7 @@ class CommandQueueService:
         self._consumer_thread.start()
 
     def stop_consumer(self):
-        """停止消费者线程"""
+        """Stop the consumer thread"""
         if not self._running:
             return
 
@@ -91,13 +91,13 @@ class CommandQueueService:
             self._consumer_thread.join(timeout=2.0)
 
     def _consumer_loop(self):
-        """消费者循环：不断从队列中取出命令并执行"""
+        """Consumer loop: continuously dequeue and execute commands"""
         while self._running:
             try:
-                # 复制队列字典，避免在迭代时字典被修改
+                # Snapshot queue dict to avoid modification during iteration
                 queues_snapshot = dict(self._queues)
 
-                # 遍历所有队列，执行命令
+                # Iterate all queues and execute commands
                 for machine_id, queue in queues_snapshot.items():
                     if not queue.is_empty():
                         command = queue.get()
@@ -109,15 +109,15 @@ class CommandQueueService:
                                     command['params']
                                 )
                             except Exception as e:
-                                logger.error(f"执行命令失败: machine_id={machine_id}, error={e}")
+                                logger.error(f"Command execution failed: machine_id={machine_id}, error={e}")
 
                 time.sleep(self.poll_interval)
 
             except Exception as e:
-                logger.error(f"消费者循环异常: {e}")
+                logger.error(f"Consumer loop error: {e}")
                 time.sleep(self.poll_interval)
 
 
-# 全局实例
+# Global instance
 command_queue_service = CommandQueueService()
 

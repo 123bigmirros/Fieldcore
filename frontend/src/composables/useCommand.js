@@ -3,9 +3,9 @@ import axios from 'axios'
 import { CONFIG } from '../constants/config'
 
 /**
- * 命令发送管理
+ * Command sending management
  */
-export function useCommand(humanId) {
+export function useCommand(humanId, apiKey) {
     const command = ref('')
     const isSending = ref(false)
     const message = ref('')
@@ -16,7 +16,7 @@ export function useCommand(humanId) {
     })
 
     /**
-     * 发送命令
+     * Send command
      */
     async function sendCommand() {
         if (!canSend.value || !humanId) return false
@@ -26,13 +26,13 @@ export function useCommand(humanId) {
         messageType.value = 'info'
 
         try {
-            // 使用 humanId 作为 API key（放在 Authorization header）
+            // Use API Key auth (in Authorization header with Bearer prefix)
             const response = await axios.post(
-                `${CONFIG.API_BASE_URL}/api/agent/${humanId}/command`,
+                `${CONFIG.API_BASE_URL}/api/v1/agents/${humanId}/commands`,
                 { command: command.value.trim() },
                 {
                     headers: {
-                        'Authorization': humanId
+                        'Authorization': `Bearer ${apiKey}`
                     }
                 }
             )
@@ -42,20 +42,22 @@ export function useCommand(humanId) {
                 messageType.value = 'success'
                 command.value = ''
 
-                // 3秒后清除消息
+                // Clear message after 3 seconds
                 setTimeout(() => {
                     message.value = ''
                 }, 3000)
 
                 return true
             } else {
-                message.value = response.data.error || '发送失败'
+                const errData = response.data.error
+                message.value = (errData && errData.message) || errData || '发送失败'
                 messageType.value = 'error'
                 return false
             }
         } catch (error) {
-            console.error('发送命令失败:', error)
-            message.value = error.response?.data?.error || '发送失败，请重试'
+            console.error('Failed to send command:', error)
+            const errData = error.response?.data?.error
+            message.value = (errData && errData.message) || errData || '发送失败，请重试'
             messageType.value = 'error'
             return false
         } finally {
@@ -64,7 +66,7 @@ export function useCommand(humanId) {
     }
 
     /**
-     * 重置状态
+     * Reset state
      */
     function reset() {
         command.value = ''
@@ -82,4 +84,3 @@ export function useCommand(humanId) {
         reset
     }
 }
-

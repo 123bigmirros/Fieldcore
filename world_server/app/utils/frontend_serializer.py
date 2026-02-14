@@ -1,27 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Frontend Serializer - 前端数据序列化工具
+Frontend Serializer - Frontend data serialization utility
 
-将内部数据格式转换为前端需要的格式
+Converts internal data formats to frontend-compatible formats
 """
 
 from typing import Dict, List
+from ..services.collision_service import SLOT_OFFSETS
 
 
 class FrontendSerializer:
-    """前端数据序列化器"""
+    """Frontend data serializer"""
 
     @staticmethod
     def serialize_machines(machines: Dict[str, dict]) -> List[dict]:
-        """
-        序列化机器人数据为前端格式
-
-        Args:
-            machines: 机器人字典
-
-        Returns:
-            前端格式的机器人数组
-        """
+        """Serialize machine data to frontend format"""
         result = []
         for machine_id, machine_data in machines.items():
             result.append({
@@ -35,21 +28,14 @@ class FrontendSerializer:
                 'size': machine_data.get('size', 1.0),
                 'facing_direction': list(machine_data.get('facing_direction', [1.0, 0.0])),
                 'view_size': machine_data.get('view_size', 3),
-                'visibility_radius': machine_data.get('view_size', 3)  # 前端兼容字段
+                'visibility_radius': machine_data.get('view_size', 3),
+                'slots': machine_data.get('slots', {"top": None, "bottom": None, "left": None, "right": None}),
             })
         return result
 
     @staticmethod
     def serialize_obstacles(obstacles: Dict[str, dict]) -> List[dict]:
-        """
-        序列化障碍物数据为前端格式
-
-        Args:
-            obstacles: 障碍物字典
-
-        Returns:
-            前端格式的障碍物数组
-        """
+        """Serialize obstacle data to frontend format"""
         result = []
         for obstacle_id, obstacle_data in obstacles.items():
             result.append({
@@ -60,3 +46,22 @@ class FrontendSerializer:
             })
         return result
 
+    @staticmethod
+    def serialize_carried_resources(machines: Dict[str, dict]) -> List[dict]:
+        """Serialize all carried resources (with world coordinates)"""
+        result = []
+        for machine_id, machine_data in machines.items():
+            pos = machine_data.get('position', [0, 0, 0])
+            slots = machine_data.get('slots', {})
+            for slot, resource in slots.items():
+                if resource is None:
+                    continue
+                dx, dy = SLOT_OFFSETS[slot]
+                result.append({
+                    'holder_id': machine_id,
+                    'slot': slot,
+                    'position': [int(pos[0]) + dx, int(pos[1]) + dy, 0],
+                    'size': resource.get('size', 1.0),
+                    'obstacle_type': resource.get('obstacle_type', 'static'),
+                })
+        return result

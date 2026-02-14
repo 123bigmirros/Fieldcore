@@ -11,8 +11,8 @@ OpenManus is a multi-agent system for managing intelligent robots (machines) coo
 Four microservices communicate via REST APIs:
 
 - **World Server** (port 8005, `world_server/`) — Core world state: robot positions, obstacles, registration, actions, persistence
-- **MCP Server** (port 8006, `mcp_server/`) — Tool listing and invocation via Model Context Protocol
-- **Agent Server** (port 8007, `agent_server/`) — Agent lifecycle, command execution, auth. Includes a Celery worker for async tasks
+- **MCP Server** (port 8003, `mcp_server/`) — Tool listing and invocation via Model Context Protocol
+- **Agent Server** (port 8004, `agent_server/`) — Agent lifecycle, command execution, auth. Includes a Celery worker for async tasks
 - **Frontend** (port 3000, `frontend/`) — Vue 3 + Vite visualization with real-time coordinate rendering
 
 Shared core code lives in `app/` — agent implementations, service layer, tools, prompts, LLM integration, and config.

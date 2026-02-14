@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""机器人模型 - 表示世界中的机器人实体"""
+"""Machine model - Represents a machine entity in the world"""
 
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
@@ -8,7 +8,7 @@ from .position import Position
 
 @dataclass
 class MachineInfo:
-    """机器人信息"""
+    """Machine info"""
     machine_id: str
     position: Position
     life_value: int = 10
@@ -19,9 +19,10 @@ class MachineInfo:
     size: float = 1.0
     facing_direction: Tuple[float, float] = field(default_factory=lambda: (1.0, 0.0))
     view_size: int = 3
+    slots: dict = field(default_factory=lambda: {"top": None, "bottom": None, "left": None, "right": None})
 
     def to_dict(self) -> dict:
-        """转换为字典"""
+        """Convert to dict"""
         return {
             'machine_id': self.machine_id,
             'position': self.position.to_list(),
@@ -33,11 +34,18 @@ class MachineInfo:
             'size': self.size,
             'facing_direction': list(self.facing_direction),
             'view_size': self.view_size,
+            'slots': dict(self.slots),
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "MachineInfo":
-        """从字典创建"""
+        """Create from dict"""
+        default_slots = {"top": None, "bottom": None, "left": None, "right": None}
+        slots = data.get('slots', default_slots)
+        # Ensure all four keys exist
+        for key in default_slots:
+            if key not in slots:
+                slots[key] = None
         return cls(
             machine_id=data['machine_id'],
             position=Position(*data['position']),
@@ -49,5 +57,6 @@ class MachineInfo:
             size=data.get('size', 1.0),
             facing_direction=tuple(data.get('facing_direction', [1.0, 0.0])),
             view_size=int(data.get('view_size', 3)),
+            slots=slots,
         )
 

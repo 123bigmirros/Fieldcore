@@ -2,7 +2,7 @@
   <div
     :class="['game-object', type]"
     :style="objectStyle"
-    :title="object[idKey]"
+    :title="objectTitle"
   >
     <template v-if="type === 'machine'">
       <div class="machine-front" :style="frontStyle"></div>
@@ -19,10 +19,16 @@ import { DIRECTION_STYLES } from '../utils/coordinateTransform'
 const props = defineProps({
   object: Object,
   transformer: Object,
-  type: String  // 'machine' or 'obstacle'
+  type: String  // 'machine', 'obstacle', or 'carried_resource'
 })
 
-const idKey = computed(() => props.type === 'machine' ? 'machine_id' : 'obstacle_id')
+const objectTitle = computed(() => {
+  if (props.type === 'carried_resource') {
+    return `Carried by ${props.object.holder_id} (${props.object.slot})`
+  }
+  const key = props.type === 'machine' ? 'machine_id' : 'obstacle_id'
+  return props.object[key]
+})
 
 const objectStyle = computed(() => {
   const [x, y] = props.object.position
@@ -135,5 +141,17 @@ function getMachineDisplayName(machineId) {
   box-shadow: 0 0 8px 2px rgba(116, 185, 255, 0.5);
   border-color: #74b9ff;
 }
-</style>
 
+.carried_resource {
+  background: linear-gradient(135deg, #e17055 0%, #d63031 100%);
+  border: 2px solid #fdcb6e;
+  border-radius: 2px;
+  box-shadow: 0 0 8px 2px rgba(253, 203, 110, 0.6), 0 0 4px 1px rgba(214, 48, 49, 0.4);
+  z-index: 3;
+}
+
+.carried_resource:hover {
+  box-shadow: 0 0 12px 4px rgba(253, 203, 110, 0.8), 0 0 6px 2px rgba(214, 48, 49, 0.6);
+  border-color: #ffeaa7;
+}
+</style>

@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Human Manager - Human Agent 管理
+Human Manager - Human Agent Management
 
-负责 Human Agent 的创建、查询、删除和命令执行
+Responsible for creating, querying, deleting, and executing commands for Human Agents.
 """
 
 import sys
 import os
 
-# 添加项目根目录
+# Add project root directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from threading import Lock
@@ -24,7 +24,7 @@ from ..models.agent import HumanInfo
 
 
 class HumanManager:
-    """Human Agent 管理器 - 单例"""
+    """Human Agent Manager - Singleton"""
 
     _instance = None
     _lock = Lock()
@@ -45,12 +45,13 @@ class HumanManager:
         self._data_lock = Lock()
         self._initialized = True
 
-    def create(self, human_id: str) -> Tuple[bool, str]:
+    def create(self, human_id: str, machine_count: int = 3) -> Tuple[bool, str]:
         """
-        创建 Human Agent
+        Create a Human Agent
 
         Args:
             human_id: Human ID
+            machine_count: Number of robots
 
         Returns:
             (success, error_message)
@@ -62,7 +63,7 @@ class HumanManager:
             try:
                 human = HumanAgent(
                     human_id=human_id,
-                    machine_count=0
+                    machine_count=machine_count
                 )
 
                 asyncio.run(human.initialize(
@@ -73,20 +74,20 @@ class HumanManager:
                 self._humans[human_id] = human
                 self._human_machines[human_id] = []
 
-                logger.info(f"✅ Human {human_id} 创建成功")
+                logger.info(f"Human {human_id} created successfully")
                 return True, ""
 
             except Exception as e:
-                logger.error(f"创建 Human 失败: {e}")
+                logger.error(f"Failed to create Human: {e}")
                 return False, str(e)
 
     def get(self, human_id: str) -> Optional[HumanAgent]:
-        """获取 Human Agent 实例"""
+        """Get a Human Agent instance"""
         with self._data_lock:
             return self._humans.get(human_id)
 
     def get_info(self, human_id: str) -> Optional[dict]:
-        """获取 Human 信息"""
+        """Get Human information"""
         with self._data_lock:
             if human_id not in self._humans:
                 return None
@@ -98,10 +99,10 @@ class HumanManager:
             ).to_dict()
 
     def get_all(self) -> Dict[str, dict]:
-        """获取所有 Human 信息"""
+        """Get all Human information"""
         with self._data_lock:
             result = {}
-            # 直接构建信息，避免调用 get_info() 导致死锁
+            # Build info directly to avoid deadlock from calling get_info()
             for human_id in self._humans:
                 result[human_id] = HumanInfo(
                     agent_id=human_id,
@@ -111,12 +112,12 @@ class HumanManager:
             return result
 
     def exists(self, human_id: str) -> bool:
-        """检查 Human 是否存在"""
+        """Check if a Human exists"""
         with self._data_lock:
             return human_id in self._humans
 
     def delete(self, human_id: str) -> Tuple[bool, str]:
-        """删除 Human Agent"""
+        """Delete a Human Agent"""
         with self._data_lock:
             if human_id not in self._humans:
                 return False, f"Human {human_id} not found"
@@ -127,18 +128,18 @@ class HumanManager:
 
                 del self._humans[human_id]
 
-                # 返回关联的机器列表，供外部处理
+                # Return the list of associated machines for external handling
                 machine_ids = self._human_machines.pop(human_id, [])
 
-                logger.info(f"🧹 Human {human_id} 已删除")
+                logger.info(f"Human {human_id} deleted")
                 return True, ""
 
             except Exception as e:
-                logger.error(f"删除 Human 失败: {e}")
+                logger.error(f"Failed to delete Human: {e}")
                 return False, str(e)
 
     def send_command(self, human_id: str, command: str) -> Tuple[bool, str]:
-        """向 Human 发送命令"""
+        """Send a command to a Human"""
         with self._data_lock:
             if human_id not in self._humans:
                 return False, f"Human {human_id} not found"
@@ -151,24 +152,24 @@ class HumanManager:
                 return False, str(e)
 
     def add_machine(self, human_id: str, machine_id: str):
-        """添加机器到 Human 的管理列表"""
+        """Add a machine to the Human's management list"""
         with self._data_lock:
             if human_id in self._human_machines:
                 if machine_id not in self._human_machines[human_id]:
                     self._human_machines[human_id].append(machine_id)
 
     def remove_machine(self, human_id: str, machine_id: str):
-        """从 Human 的管理列表中移除机器"""
+        """Remove a machine from the Human's management list"""
         with self._data_lock:
             if human_id in self._human_machines:
                 if machine_id in self._human_machines[human_id]:
                     self._human_machines[human_id].remove(machine_id)
 
     def get_machines(self, human_id: str) -> List[str]:
-        """获取 Human 管理的机器列表"""
+        """Get the list of machines managed by a Human"""
         with self._data_lock:
             return self._human_machines.get(human_id, []).copy()
 
 
-# 全局实例
+# Global instance
 human_manager = HumanManager()

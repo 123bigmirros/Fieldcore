@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-World Service - 世界管理服务（主服务）
+World Service - World management service (main service)
 
-协调各模块，提供统一 API
+Coordinates submodules and provides a unified API
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -18,8 +18,19 @@ from .view_service import ViewService
 from .command_queue_service import command_queue_service
 
 
+def _is_visible(position, my_machines):
+    """Chebyshev distance check: is position within any machine's field of view"""
+    for m in my_machines:
+        mx, my_ = m["position"][0], m["position"][1]
+        dx = abs(position[0] - mx)
+        dy = abs(position[1] - my_)
+        if max(dx, dy) <= m.get("view_size", 3):
+            return True
+    return False
+
+
 class WorldService:
-    """世界管理服务 - 单例"""
+    """World management service - singleton"""
 
     _instance: Optional["WorldService"] = None
     _lock = Lock()
@@ -40,14 +51,14 @@ class WorldService:
         self._obstacles: Dict[str, dict] = {}
         self._data_lock = Lock()
 
-        # 初始化子模块
+        # Initialize submodules
         self._storage = WorldStorage()
         self._collision_service = CollisionService(self._machines, self._obstacles)
         self._actions = ActionHandler(self.world_bounds, self._collision_service.check_collision)
         self._view_service = ViewService(self._machines, self._obstacles)
         self._serializer = FrontendSerializer()
 
-        # 加载或初始化
+        # Load or initialize
         machines, obstacles, loaded = self._storage.load()
         if loaded:
             self._machines = machines
@@ -55,17 +66,17 @@ class WorldService:
         else:
             self._obstacles = WorldStorage.create_default_obstacles()
 
-        # 初始化命令队列服务
+        # Initialize command queue service
         command_queue_service.set_execute_callback(self._execute_action_internal)
         command_queue_service.start_consumer()
 
-        # 为已存在的 machines 创建队列
+        # Create queues for existing machines
         for machine_id in self._machines.keys():
             command_queue_service.create_queue(machine_id)
 
         self.initialized = True
 
-    # ==================== 核心 API ====================
+    # ==================== Core API ====================
 
     def register_machine(
         self,
@@ -78,7 +89,7 @@ class WorldService:
         facing_direction: Tuple[float, float] = (1.0, 0.0),
         view_size: int = config.DEFAULT_VIEW_SIZE
     ) -> Tuple[bool, str]:
-        """注册机器人"""
+        """Register a machine"""
         with self._data_lock:
             if machine_id in self._machines:
                 return False, "Machine already exists"
@@ -87,7 +98,7 @@ class WorldService:
             if self._collision_service.check_collision(pos, size):
                 return False, "Position has collision"
 
-            # 确保 view_size 是奇数且至少为 1
+            # Ensure view_size is odd and at least 1
             view_size = max(1, int(view_size))
             if view_size % 2 == 0:
                 view_size += 1
@@ -104,16 +115,16 @@ class WorldService:
             )
             self._machines[machine_id] = machine.to_dict()
 
-            # 为新的 machine 创建命令队列
+            # Create command queue for the new machine
             command_queue_service.create_queue(machine_id)
 
             return True, ""
 
     def _execute_action_internal(self, machine_id: str, action: str, params: dict) -> dict:
         """
-        内部方法：实际执行动作（由命令队列服务调用）
+        Internal method: execute an action (called by command queue service)
 
-        注意：这个方法会在消费者线程中被调用，需要考虑线程安全
+        Note: called from the consumer thread, must be thread-safe
         """
         with self._data_lock:
             if machine_id not in self._machines:
@@ -129,6 +140,10 @@ class WorldService:
                 return self._actions.attack(machine, params, self._machines, self._obstacles, machine_id)
             elif action == 'turn':
                 return self._actions.turn(machine, params)
+            elif action == 'grab':
+                return self._actions.grab(machine, params, self._obstacles, machine_id)
+            elif action == 'drop':
+                return self._actions.drop(machine, params, self._obstacles, machine_id)
             elif action == 'remove':
                 del self._machines[machine_id]
                 command_queue_service.remove_queue(machine_id)
@@ -138,15 +153,15 @@ class WorldService:
 
     def enqueue_command(self, machine_id: str, action: str, params: dict) -> dict:
         """
-        将命令添加到队列
+        Enqueue a command
 
         Args:
-            machine_id: 机器ID
-            action: 动作类型
-            params: 动作参数
+            machine_id: Machine ID
+            action: Action type
+            params: Action parameters
 
         Returns:
-            包含成功状态的字典
+            Dict with success status
         """
         with self._data_lock:
             if machine_id not in self._machines:
@@ -159,32 +174,32 @@ class WorldService:
             return {'success': False, 'error': 'Command queue is full'}
 
     def save_world(self) -> bool:
-        """保存世界"""
+        """Save world state"""
         with self._data_lock:
             return self._storage.save(self._machines, self._obstacles)
 
     def get_machine_view(self, machine_id: str) -> Optional[dict]:
-        """获取视野"""
+        """Get field of view"""
         with self._data_lock:
             return self._view_service.get_machine_view(machine_id)
 
-    # ==================== 调试方法 ====================
+    # ==================== Debug Methods ====================
 
     def get_all_machines(self) -> dict:
-        """获取所有机器人（原始格式）"""
+        """Get all machines (raw format)"""
         with self._data_lock:
             return dict(self._machines)
 
     def get_all_obstacles(self) -> dict:
-        """获取所有障碍物（原始格式）"""
+        """Get all obstacles (raw format)"""
         with self._data_lock:
             return dict(self._obstacles)
 
     def reset_world(self) -> dict:
-        """重置世界"""
+        """Reset world"""
         with self._data_lock:
             count = len(self._machines)
-            # 清理所有命令队列
+            # Clean up all command queues
             for machine_id in list(self._machines.keys()):
                 command_queue_service.remove_queue(machine_id)
             self._machines.clear()
@@ -192,22 +207,69 @@ class WorldService:
             return {'machines_removed': count}
 
     def get_machine(self, machine_id: str) -> Optional[dict]:
-        """获取单个机器信息"""
+        """Get a single machine's info"""
         with self._data_lock:
             return self._machines.get(machine_id)
 
-    # ==================== 前端数据接口 ====================
+    # ==================== Frontend Data API ====================
 
     def get_machines_for_frontend(self) -> List[dict]:
-        """获取所有机器人数据（前端格式）"""
+        """Get all machine data (frontend format)"""
         with self._data_lock:
             return self._serializer.serialize_machines(self._machines)
 
     def get_obstacles_for_frontend(self) -> List[dict]:
-        """获取所有障碍物数据（前端格式）"""
+        """Get all obstacle data (frontend format)"""
         with self._data_lock:
             return self._serializer.serialize_obstacles(self._obstacles)
 
+    def get_carried_resources_for_frontend(self) -> List[dict]:
+        """Get all carried resource data (frontend format)"""
+        with self._data_lock:
+            return self._serializer.serialize_carried_resources(self._machines)
 
-# 全局实例
+    def get_view_for_human(self, human_id: str) -> dict:
+        """Get world data visible to a player (fog of war filtered)"""
+        with self._data_lock:
+            # Find all machines owned by this player
+            my_machines = []
+            my_machine_ids = []
+            for mid, mdata in self._machines.items():
+                if mdata.get("owner") == human_id:
+                    my_machine_ids.append(mid)
+                    pos = mdata.get("position", [0, 0, 0])
+                    my_machines.append({
+                        "position": pos,
+                        "view_size": mdata.get("view_size", 3),
+                    })
+
+            # Serialize full data
+            all_machines = self._serializer.serialize_machines(self._machines)
+            all_obstacles = self._serializer.serialize_obstacles(self._obstacles)
+            all_carried = self._serializer.serialize_carried_resources(self._machines)
+
+            # Filter: keep only entities within field of view (own machines always visible)
+            visible_machines = [
+                m for m in all_machines
+                if m["machine_id"] in my_machine_ids
+                or _is_visible(m["position"], my_machines)
+            ]
+            visible_obstacles = [
+                o for o in all_obstacles
+                if _is_visible(o["position"], my_machines)
+            ]
+            visible_carried = [
+                r for r in all_carried
+                if _is_visible(r["position"], my_machines)
+            ]
+
+            return {
+                "machines": visible_machines,
+                "obstacles": visible_obstacles,
+                "carried_resources": visible_carried,
+                "my_machine_ids": my_machine_ids,
+            }
+
+
+# Global instance
 world_service = WorldService()

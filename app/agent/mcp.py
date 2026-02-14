@@ -30,8 +30,8 @@ class MCPAgent(ToolCallAgent):
     max_steps: int = 20
     connection_type: str = "stdio"  # "stdio" or "sse"
 
-    # Agent类型，用于过滤工具
-    agent_type: Optional[str] = Field(default=None, description="Agent类型：human, machine, 或 None(通用)")
+    # Agent type, used for tool filtering
+    agent_type: Optional[str] = Field(default=None, description="Agent type: human, machine, or None (generic)")
 
     # Track tool schemas to detect changes
     tool_schemas: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
@@ -70,7 +70,7 @@ class MCPAgent(ToolCallAgent):
         elif self.connection_type == "http_api":
             if not server_url:
                 raise ValueError("Server URL is required for HTTP API connection")
-            # 使用HTTP MCP客户端
+            # Use HTTP MCP client
             from app.tool.http_mcp import HTTPMCPClients
             self.mcp_clients = HTTPMCPClients(server_url=server_url)
             await self.mcp_clients.initialize()
@@ -91,10 +91,10 @@ class MCPAgent(ToolCallAgent):
         tool_names = list(self.mcp_clients.tool_map.keys())
         tools_info = ", ".join(tool_names)
 
-        # Add system prompt and available tools information
+        # Add available tools information (system_prompt is passed separately via toolcall.think())
         self.memory.add_message(
             Message.system_message(
-                f"{self.system_prompt}\n\nAvailable MCP tools: {tools_info}"
+                f"Available MCP tools: {tools_info}"
             )
         )
 
@@ -196,18 +196,18 @@ class MCPAgent(ToolCallAgent):
         if not self.available_tools or tool_name not in self.available_tools.tool_map:
             raise ValueError(f"Tool '{tool_name}' not available")
 
-        # 检查工具权限
+        # Check tool permissions
         if self.agent_type:
-            # 获取工具实例以检查其agent_type
+            # Get tool instance to check its agent_type
             tool_instance = self.available_tools.tool_map.get(tool_name)
             if tool_instance and hasattr(tool_instance, 'agent_type') and tool_instance.agent_type:
-                # 如果工具有特定的agent_type限制
+                # If the tool has a specific agent_type restriction
                 if tool_instance.agent_type != self.agent_type:
                     raise ValueError(f"Tool '{tool_name}' is only available for {tool_instance.agent_type} agents, not {self.agent_type} agents")
-                # 如果是通用工具（agent_type为None），则允许访问
+                # If it's a generic tool (agent_type is None), allow access
                 elif tool_instance.agent_type is None:
                     pass
-            # 如果工具没有agent_type标记，则允许访问
+            # If the tool has no agent_type tag, allow access
 
         try:
             result = await self.available_tools.execute(name=tool_name, tool_input=kwargs)

@@ -1,66 +1,50 @@
 # -*- coding: utf-8 -*-
 """
-MCP Controller - MCP 工具调用控制器
+MCP Controller — tool listing and invocation via HTTP.
 
-提供 HTTP API:
-- list_tools: 获取工具列表
-- call_tool: 调用工具
+Endpoints:
+  GET  /tools                    — list available tools
+  POST /tools/<tool_name>/invoke — invoke a tool
 """
 
+import sys
+import os
 import asyncio
-from flask import Blueprint, request, jsonify
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from flask import Blueprint, request
+
+from shared.response import success_response, error_response
+from shared import error_codes as EC
+from shared.validation import ToolInvokeRequest
 
 from mcp_server.app.services.mcp_service import mcp_service
 
-mcp_bp = Blueprint('mcp', __name__, url_prefix='/api/mcp')
+mcp_bp = Blueprint("mcp", __name__, url_prefix="/api/v1/mcp")
 
 
-@mcp_bp.route('/list_tools', methods=['GET'])
+@mcp_bp.route("/tools", methods=["GET"])
 def list_tools():
-    """
-    获取工具列表
-
-    Response:
-        {
-            "tools": [
-                {
-                    "name": "...",
-                    "description": "...",
-                    "parameters": {...}
-                },
-                ...
-            ]
-        }
-    """
+    """List all available tools."""
     tools = mcp_service.list_tools()
-    return jsonify({"tools": tools})
+    return success_response({"tools": tools})
 
 
-@mcp_bp.route('/call_tool', methods=['POST'])
-def call_tool():
-    """
-    调用工具
-
-    Request:
-        {
-            "tool_name": "machine_step_movement",
-            "parameters": {"machine_id": "robot_01", "direction": [1,0,0], "distance": 1}
-        }
-
-    Response:
-        {"success": true, "result": "..."}
-    """
-    data = request.get_json()
-    tool_name = data.get('tool_name')
-    parameters = data.get('parameters', {})
-
-    if not tool_name:
-        return jsonify({'success': False, 'error': 'tool_name is required'}), 400
+@mcp_bp.route("/tools/<tool_name>/invoke", methods=["POST"])
+def call_tool(tool_name):
+    """Invoke a tool by name."""
+    data = request.get_json() or {}
 
     try:
-        result = asyncio.run(mcp_service.call_tool(tool_name, parameters))
-        return jsonify({'success': True, 'result': result})
-    except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 404
+        req = ToolInvokeRequest(**data)
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return error_response(EC.VALIDATION_ERROR, str(e))
+
+    try:
+        result = asyncio.run(mcp_service.call_tool(tool_name, req.parameters))
+        return success_response({"result": result})
+    except ValueError as e:
+        return error_response(EC.TOOL_NOT_FOUND, str(e), 404)
+    except Exception as e:
+        return error_response(EC.TOOL_EXECUTION_FAILED, str(e), 500)

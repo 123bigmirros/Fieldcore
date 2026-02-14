@@ -3,18 +3,18 @@ import { parseLaserAction } from '../utils/dataParser'
 import { CONFIG } from '../constants/config'
 
 /**
- * 激光特效管理
+ * Laser effect management
  */
 export function useLaser(machines, addLaserVision, removeLaserVision) {
     const activeLasers = ref([])
     const shownAttacks = ref([])
 
     /**
-     * 检查并创建激光特效
+     * Check for and create laser effects
      */
     function checkForLaserEffects() {
         machines.value.forEach(machine => {
-            // 只处理属于当前human的机器人的激光攻击
+            // Only process laser attacks from machines belonging to the current human
             if (!machine.isMyMachine || !machine.last_action?.includes('laser_attack')) {
                 return
             }
@@ -28,7 +28,7 @@ export function useLaser(machines, addLaserVision, removeLaserVision) {
                 createLaserEffect(machine)
                 shownAttacks.value.push(attackId)
 
-                // 限制历史记录大小
+                // Limit history size
                 if (shownAttacks.value.length > 50) {
                     shownAttacks.value = shownAttacks.value.slice(-25)
                 }
@@ -37,15 +37,15 @@ export function useLaser(machines, addLaserVision, removeLaserVision) {
     }
 
     /**
-     * 创建激光特效
+     * Create a laser effect
      */
     function createLaserEffect(machine) {
         const laserData = parseLaserAction(machine)
         if (!laserData) return
 
-        console.log(`⚡ 创建激光特效: ${machine.machine_id}`)
+        console.log(`⚡ Creating laser effect: ${machine.machine_id}`)
 
-        // 创建激光束
+        // Create laser beam
         const laser = {
             id: laserData.effectId,
             startPos: laserData.laser_start_pos,
@@ -56,17 +56,17 @@ export function useLaser(machines, addLaserVision, removeLaserVision) {
 
         activeLasers.value.push(laser)
 
-        // 0.5秒后移除激光束
+        // Remove laser beam after 0.5 seconds
         setTimeout(() => {
             activeLasers.value = activeLasers.value.filter(l => l.id !== laserData.effectId)
         }, CONFIG.LASER_DURATION)
 
-        // 创建激光路径视野
+        // Create laser path vision
         createLaserVision(laserData.laser_path_grids, laserData.effectId)
     }
 
     /**
-     * 创建激光路径的临时视野
+     * Create temporary vision along the laser path
      */
     function createLaserVision(pathGrids, effectId) {
         const visionAreas = pathGrids.map((grid, index) => ({
@@ -78,15 +78,15 @@ export function useLaser(machines, addLaserVision, removeLaserVision) {
 
         addLaserVision(visionAreas)
 
-        console.log(`👁️ 创建了${visionAreas.length}个激光视野区域`)
+        console.log(`👁️ Created ${visionAreas.length} laser vision areas`)
 
-        // 3秒后移除激光视野
+        // Remove laser vision after 3 seconds
         setTimeout(() => {
             removeLaserVision(area => !area.id.startsWith(`${effectId}_`))
         }, CONFIG.LASER_VISION_DURATION)
     }
 
-    // 监听机器人数据变化
+    // Watch for changes in machine data
     watch(machines, checkForLaserEffects, { deep: true })
 
     return {

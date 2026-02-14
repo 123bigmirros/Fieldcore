@@ -200,3 +200,7 @@ cython_debug/
 
 # node
 node_modules
+
+# Runtime files
+.server_pids
+.jukit/

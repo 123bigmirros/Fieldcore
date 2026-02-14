@@ -32,16 +32,21 @@
 </template>
 
 <script setup>
+import { reactive } from 'vue'
 import { useCommand } from '../composables/useCommand'
 
 const props = defineProps({
   humanId: {
     type: String,
     required: true
+  },
+  apiKey: {
+    type: String,
+    required: true
   }
 })
 
-const commandState = useCommand(props.humanId)
+const commandState = reactive(useCommand(props.humanId, props.apiKey))
 
 async function handleSend() {
   await commandState.sendCommand()

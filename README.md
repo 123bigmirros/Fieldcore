@@ -1,187 +1,142 @@
-<p align="center">
-  <img src="assets/logo.jpg" width="200"/>
-</p>
+# Fieldcore
 
-English | [中文](README_zh.md) | [한국어](README_ko.md) | [日本語](README_ja.md)
+A multi-agent command system for coordinating intelligent robots through LLM-powered human commanders. Currently a real-time strategy game — designed to evolve into a real-world multi-robot control platform.
 
-> **Important:** This version is the initial complete version of the OpenManus project, containing its core concepts. For the latest updates, please visit https://github.com/FoundationAgents/OpenManus.
+![Fieldcore](image.png)
 
-[![GitHub stars](https://img.shields.io/github/stars/mannaandpoem/OpenManus?style=social)](https://github.com/mannaandpoem/OpenManus/stargazers)
-&ensp;
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) &ensp;
-[![Discord Follow](https://dcbadge.vercel.app/api/server/DYn29wFk9z?style=flat)](https://discord.gg/DYn29wFk9z)
-[![Demo](https://img.shields.io/badge/Demo-Hugging%20Face-yellow)](https://huggingface.co/spaces/lyh-917/OpenManusDemo)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15186407.svg)](https://doi.org/10.5281/zenodo.15186407)
+## What is Fieldcore?
 
-# 👋 OpenManus
+Fieldcore lets a human commander issue high-level orders (e.g., "scout the north area" or "attack enemy base") that an LLM decomposes into concrete actions for multiple robots. Each robot perceives its local environment, executes movement and combat commands, and reports back — all visualized in a real-time web interface.
 
-Manus is incredible, but OpenManus can achieve any idea without an *Invite Code* 🛫!
+### Key Features
 
-Our team members [@Xinbin Liang](https://github.com/mannaandpoem) and [@Jinyu Xiang](https://github.com/XiangJinyu) (core authors), along with [@Zhaoyang Yu](https://github.com/MoshiQAQ), [@Jiayi Zhang](https://github.com/didiforgithub), and [@Sirui Hong](https://github.com/stellaHSR), we are from [@MetaGPT](https://github.com/geekan/MetaGPT). The prototype is launched within 3 hours and we are keeping building!
+- **LLM-Powered Command** — Natural language orders are decomposed into multi-step robot tasks
+- **Multi-Robot Coordination** — Register and control multiple machines simultaneously
+- **Real-Time Visualization** — Vue 3 frontend with grid world, fog of war, laser effects, and live position tracking
+- **Fog of War** — Robots only see within their vision radius; strategic information is limited
+- **Microservice Architecture** — Clean separation of world state, agent logic, tool protocol, and UI
+- **Extensible Tool System** — MCP (Model Context Protocol) for adding custom robot capabilities
 
-It's a simple implementation, so we welcome any suggestions, contributions, and feedback!
+## Architecture
 
-Enjoy your own agent with OpenManus!
-
-We're also excited to introduce [OpenManus-RL](https://github.com/OpenManus/OpenManus-RL), an open-source project dedicated to reinforcement learning (RL)- based (such as GRPO) tuning methods for LLM agents, developed collaboratively by researchers from UIUC and OpenManus.
-
-## Project Demo
-
-<video src="https://private-user-images.githubusercontent.com/61239030/420168772-6dcfd0d2-9142-45d9-b74e-d10aa75073c6.mp4?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDEzMTgwNTksIm5iZiI6MTc0MTMxNzc1OSwicGF0aCI6Ii82MTIzOTAzMC80MjAxNjg3NzItNmRjZmQwZDItOTE0Mi00NWQ5LWI3NGUtZDEwYWE3NTA3M2M2Lm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAzMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMzA3VDAzMjIzOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdiZjFkNjlmYWNjMmEzOTliM2Y3M2VlYjgyNDRlZDJmOWE3NWZhZjE1MzhiZWY4YmQ3NjdkNTYwYTU5ZDA2MzYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UuHQCgWYkh0OQq9qsUWqGsUbhG3i9jcZDAMeHjLt5T4" data-canonical-src="https://private-user-images.githubusercontent.com/61239030/420168772-6dcfd0d2-9142-45d9-b74e-d10aa75073c6.mp4?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDEzMTgwNTksIm5iZiI6MTc0MTMxNzc1OSwicGF0aCI6Ii82MTIzOTAzMC80MjAxNjg3NzItNmRjZmQwZDItOTE0Mi00NWQ5LWI3NGUtZDEwYWE3NTA3M2M2Lm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAzMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMzA3VDAzMjIzOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdiZjFkNjlmYWNjMmEzOTliM2Y3M2VlYjgyNDRlZDJmOWE3NWZhZjE1MzhiZWY4YmQ3NjdkNTYwYTU5ZDA2MzYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UuHQCgWYkh0OQq9qsUWqGsUbhG3i9jcZDAMeHjLt5T4" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-height:640px; min-height: 200px"></video>
-
-## Installation
-
-We provide two installation methods. Method 2 (using uv) is recommended for faster installation and better dependency management.
-
-### Method 1: Using conda
-
-1. Create a new conda environment:
-
-```bash
-conda create -n open_manus python=3.12
-conda activate open_manus
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Frontend   │────▶│ Agent Server │────▶│ World Server │
+│  (Vue 3)     │     │  (Flask)     │     │  (Flask)     │
+│  port 3000   │     │  port 8004   │     │  port 8005   │
+└─────────────┘     └──────┬───────┘     └──────────────┘
+                           │
+                    ┌──────▼───────┐
+                    │  MCP Server  │
+                    │  (Flask)     │
+                    │  port 8003   │
+                    └──────────────┘
 ```
 
-2. Clone the repository:
+| Service | Role |
+|---------|------|
+| **World Server** | Core world state — positions, obstacles, collisions, persistence |
+| **Agent Server** | Agent lifecycle, authentication, async task execution (Celery) |
+| **MCP Server** | Tool registry and invocation via Model Context Protocol |
+| **Frontend** | Real-time grid visualization with interactive command panel |
 
-```bash
-git clone https://github.com/mannaandpoem/OpenManus.git
-cd OpenManus
-```
+### Agent Types
 
-3. Install dependencies:
+- **Human Agent** — LLM-powered commander that interprets orders and coordinates machines
+- **Machine Agent** — Executes movement, attack, and observation commands on the grid
+- **MCP Agent** — Base class for agents using Model Context Protocol tools
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- RabbitMQ (for Celery async tasks)
+- Redis
+
+### 1. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
+cd frontend && npm install
 ```
 
-### Method 2: Using uv (Recommended)
+### 2. Configure LLM
 
-1. Install uv (A fast Python package installer and resolver):
+Copy and edit the config file:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+cp config/config.example-model-ollama.toml config/config.toml
 ```
 
-2. Clone the repository:
+Edit `config/config.toml` with your LLM provider settings (OpenAI, Anthropic, Azure, Ollama, etc.).
+
+### 3. Start All Services
 
 ```bash
-git clone https://github.com/mannaandpoem/OpenManus.git
-cd OpenManus
+python start_servers.py
 ```
 
-3. Create a new virtual environment and activate it:
+This starts World Server → MCP Server → Agent Server → Agent Worker → Frontend in the correct order.
+
+### 4. Open the UI
+
+Visit `http://localhost:3000`, register a human agent, and start issuing commands.
+
+### Managing Services
 
 ```bash
-uv venv --python 3.12
-source .venv/bin/activate  # On Unix/macOS
-# Or on Windows:
-# .venv\Scripts\activate
-```
-
-4. Install dependencies:
-
-```bash
-uv pip install -r requirements.txt
-```
-
-### Browser Automation Tool (Optional)
-```bash
-playwright install
+python start_servers.py --status  # Check service status
+python start_servers.py --stop    # Stop all services
 ```
 
 ## Configuration
 
-OpenManus requires configuration for the LLM APIs it uses. Follow these steps to set up your configuration:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WORLD_SERVER_HOST/PORT` | `0.0.0.0:8005` | World server binding |
+| `AGENT_SERVER_HOST/PORT` | `0.0.0.0:8004` | Agent server binding |
+| `MCP_SERVER_HOST/PORT` | `0.0.0.0:8003` | MCP server binding |
+| `CELERY_BROKER_URL` | `amqp://guest:guest@localhost:5672/` | RabbitMQ broker |
+| `REDIS_HOST/PORT/DB` | `localhost:6379/0` | Redis connection |
 
-1. Create a `config.toml` file in the `config` directory (you can copy from the example):
+LLM configuration lives in `config/config.toml`. See `config/config.example-*.toml` for provider-specific examples (OpenAI, Anthropic, Azure, Google, Ollama).
+
+## Project Structure
+
+```
+fieldcore/
+├── app/                  # Shared core — agents, tools, LLM, prompts
+├── world_server/         # World state microservice
+├── agent_server/         # Agent management microservice
+├── mcp_server/           # MCP tool microservice
+├── frontend/             # Vue 3 + Vite frontend
+├── shared/               # Shared utilities (response envelope, validation)
+├── config/               # Configuration files
+├── design/               # API documentation
+├── tests/                # Test suite
+└── start_servers.py      # Service orchestrator
+```
+
+## Development
 
 ```bash
-cp config/config.example.toml config/config.toml
+# Run tests
+pytest tests/
+
+# Code formatting (pre-commit hooks: black, isort, autoflake)
+pre-commit run --all-files
 ```
 
-2. Edit `config/config.toml` to add your API keys and customize settings:
+## Roadmap
 
-```toml
-# Global LLM configuration
-[llm]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Replace with your actual API key
-max_tokens = 4096
-temperature = 0.0
+- [ ] Real robot integration (ROS 2 bridge)
+- [ ] Multi-human collaborative command
+- [ ] Persistent world with save/load
+- [ ] Plugin system for custom tools and behaviors
+- [ ] Mobile command interface
 
-# Optional configuration for specific LLM models
-[llm.vision]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Replace with your actual API key
-```
+## License
 
-## Quick Start
-
-One line for run OpenManus:
-
-```bash
-python main.py
-```
-
-Then input your idea via terminal!
-
-For MCP tool version, you can run:
-```bash
-python run_mcp.py
-```
-
-For unstable multi-agent version, you also can run:
-
-```bash
-python run_flow.py
-```
-
-## How to contribute
-
-We welcome any friendly suggestions and helpful contributions! Just create issues or submit pull requests.
-
-Or contact @mannaandpoem via 📧email: mannaandpoem@gmail.com
-
-**Note**: Before submitting a pull request, please use the pre-commit tool to check your changes. Run `pre-commit run --all-files` to execute the checks.
-
-## Community Group
-Join our networking group on Feishu and share your experience with other developers!
-
-<div align="center" style="display: flex; gap: 20px;">
-    <img src="assets/community_group.jpg" alt="OpenManus 交流群" width="300" />
-</div>
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=mannaandpoem/OpenManus&type=Date)](https://star-history.com/#mannaandpoem/OpenManus&Date)
-
-## Sponsors
-Thanks to [PPIO](https://ppinfra.com/user/register?invited_by=OCPKCN&utm_source=github_openmanus&utm_medium=github_readme&utm_campaign=link) for computing source support.
-> PPIO: The most affordable and easily-integrated MaaS and GPU cloud solution.
-
-
-## Acknowledgement
-
-Thanks to [anthropic-computer-use](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo)
-and [browser-use](https://github.com/browser-use/browser-use) for providing basic support for this project!
-
-Additionally, we are grateful to [AAAJ](https://github.com/metauto-ai/agent-as-a-judge), [MetaGPT](https://github.com/geekan/MetaGPT), [OpenHands](https://github.com/All-Hands-AI/OpenHands) and [SWE-agent](https://github.com/SWE-agent/SWE-agent).
-
-We also thank stepfun(阶跃星辰) for supporting our Hugging Face demo space.
-
-OpenManus is built by contributors from MetaGPT. Huge thanks to this agent community!
-
-## Cite
-```bibtex
-@misc{openmanus2025,
-  author = {Xinbin Liang and Jinyu Xiang and Zhaoyang Yu and Jiayi Zhang and Sirui Hong and Sheng Fan and Xiao Tang},
-  title = {OpenManus: An open-source framework for building general AI agents},
-  year = {2025},
-  publisher = {Zenodo},
-  doi = {10.5281/zenodo.15186407},
-  url = {https://doi.org/10.5281/zenodo.15186407},
-}
-```
+MIT

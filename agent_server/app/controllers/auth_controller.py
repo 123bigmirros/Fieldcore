@@ -1,78 +1,49 @@
 # -*- coding: utf-8 -*-
-"""
-认证控制器 - 提供用户注册和 API Key 验证接口
-"""
+"""Auth Controller — user registration and API key verification."""
 
-from flask import Blueprint, request, jsonify
+import sys
+import os
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from flask import Blueprint, request
+
+from shared.response import success_response, error_response
+from shared import error_codes as EC
+from shared.validation import RegisterRequest
 from agent_server.app.services.auth_service import auth_service
 
-auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
+auth_bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 
 
-@auth_bp.route('/register', methods=['POST'])
+@auth_bp.route("/register", methods=["POST"])
 def register():
-    """
-    注册新用户
-
-    Request:
-        {
-            "metadata": {...}  // 可选，用户元数据
-        }
-
-    Response:
-        {
-            "success": true,
-            "user_id": "user_xxx",
-            "api_key": "sk-xxx",
-            "created_at": "2024-01-01T00:00:00",
-            "metadata": {...}
-        }
-    """
+    """Register a new user and return an API key."""
     data = request.get_json() or {}
-    metadata = data.get('metadata', {})
 
-    success, result = auth_service.register(metadata=metadata)
+    try:
+        req = RegisterRequest(**data)
+    except Exception as e:
+        return error_response(EC.VALIDATION_ERROR, str(e))
+
+    success, result = auth_service.register(metadata=req.metadata)
 
     if success:
-        return jsonify({'success': True, **result}), 201
-    return jsonify({'success': False, **result}), 400
+        return success_response(result, 201)
+    return error_response(EC.INTERNAL_ERROR, result.get("error", "Registration failed"))
 
 
-@auth_bp.route('/verify', methods=['POST'])
+@auth_bp.route("/verify", methods=["POST"])
 def verify():
-    """
-    验证 API Key
-
-    Request:
-        {
-            "api_key": "sk-xxx"
-        }
-
-    Response:
-        {
-            "success": true,
-            "user_id": "user_xxx",
-            "valid": true
-        }
-    """
+    """Verify an API key."""
     data = request.get_json() or {}
-    api_key = data.get('api_key')
+    api_key = data.get("api_key")
 
     if not api_key:
-        return jsonify({'success': False, 'error': 'api_key is required'}), 400
+        return error_response(EC.VALIDATION_ERROR, "api_key is required")
 
     is_valid, user_id = auth_service.verify_api_key(api_key)
 
     if is_valid:
-        return jsonify({
-            'success': True,
-            'valid': True,
-            'user_id': user_id
-        })
-    return jsonify({
-        'success': False,
-        'valid': False,
-        'error': 'Invalid API key'
-    }), 401
-
+        return success_response({"valid": True, "user_id": user_id})
+    return error_response(EC.API_KEY_INVALID, "Invalid API key", 401)

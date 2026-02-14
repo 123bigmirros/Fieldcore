@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""用户数据模型"""
+"""User Data Model"""
 
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -8,12 +8,12 @@ from datetime import datetime
 
 @dataclass
 class User:
-    """用户信息"""
-    user_id: str  # 唯一用户 ID
+    """User Information"""
+    user_id: str  # Unique user ID
     api_key: str  # API Key
     created_at: datetime = field(default_factory=datetime.now)
     metadata: Dict = field(default_factory=dict)
-    human_id: Optional[str] = None  # 关联的 Human ID
+    human_id: Optional[str] = None  # Associated Human ID
 
     def to_dict(self) -> dict:
         return {

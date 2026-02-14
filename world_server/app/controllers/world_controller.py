@@ -1,209 +1,165 @@
 # -*- coding: utf-8 -*-
 """
-World Controller - 世界管理核心控制器
+World Controller — core API for world state management.
 
-只提供 4 个核心 API:
-1. machine_register - 注册机器人
-2. machine_action - 处理移动、攻击等操作
-3. save_world - 持久化世界状态
-4. machine_view - 获取机器人视野
+Endpoints:
+  POST /machines                     — register a machine
+  POST /machines/<machine_id>/actions — execute an action
+  POST /state                        — persist world state
+  GET  /machines/<machine_id>/view   — get machine field-of-view
+  GET  /view                         — get fog-of-war filtered view for a player
+  GET  /machines                     — list machines (paginated)
+  GET  /obstacles                    — list obstacles
+  GET  /carried-resources            — list carried resources
+  GET  /debug/*                      — debug helpers
 """
 
-from flask import Blueprint, request, jsonify
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from flask import Blueprint, request
+
+from shared.response import success_response, error_response
+from shared.pagination import get_pagination_params, paginated_response
+from shared import error_codes as EC
+from shared.validation import MachineRegisterRequest, MachineActionRequest
+
 from ..services.world_service import world_service
 
-world_bp = Blueprint('world', __name__, url_prefix='/api/world')
+world_bp = Blueprint("world", __name__, url_prefix="/api/v1/world")
 
 
-@world_bp.route('/machine_register', methods=['POST'])
+# --------------- core endpoints ---------------
+
+@world_bp.route("/machines", methods=["POST"])
 def machine_register():
-    """
-    注册机器人到世界中
-
-    Request:
-        {
-            "machine_id": "robot_01",
-            "position": [0, 0, 0],
-            "owner": "human_01",
-            "life_value": 10,
-            "machine_type": "worker"
-        }
-
-    Response:
-        {
-            "success": true,
-            "machine_id": "robot_01",
-            "position": [0, 0, 0]
-        }
-    """
+    """Register a machine in the world."""
     data = request.get_json()
-    machine_id = data.get('machine_id')
+    if not data:
+        return error_response(EC.VALIDATION_ERROR, "Request body is required")
 
-    if not machine_id:
-        return jsonify({'success': False, 'error': 'machine_id is required'}), 400
-
-    position = data.get('position', [0, 0, 0])
+    try:
+        req = MachineRegisterRequest(**data)
+    except Exception as e:
+        return error_response(EC.VALIDATION_ERROR, str(e))
 
     success, error = world_service.register_machine(
-        machine_id=machine_id,
-        position=position,
-        owner=data.get('owner', ''),
-        life_value=data.get('life_value', 10),
-        machine_type=data.get('machine_type', 'worker'),
-        size=data.get('size', 1.0),
-        facing_direction=tuple(data.get('facing_direction', [1.0, 0.0])),
-        view_size=data.get('view_size', 3)
+        machine_id=req.machine_id,
+        position=req.position,
+        owner=req.owner,
+        life_value=req.life_value,
+        machine_type=req.machine_type,
+        size=req.size,
+        facing_direction=tuple(req.facing_direction),
+        view_size=req.view_size,
     )
-
     if success:
-        return jsonify({
-            'success': True,
-            'machine_id': machine_id,
-            'position': position
-        })
-    return jsonify({'success': False, 'error': error}), 400
+        return success_response(
+            {"machine_id": req.machine_id, "position": req.position}, 201
+        )
+
+    # Map service-level error strings to error codes
+    code = EC.VALIDATION_ERROR
+    if "already exists" in error:
+        code = EC.MACHINE_ALREADY_EXISTS
+    elif "collision" in error.lower():
+        code = EC.POSITION_COLLISION
+    return error_response(code, error)
 
 
-@world_bp.route('/machine_action', methods=['POST'])
-def machine_action():
-    """
-    处理机器人动作（移动、攻击等）
-
-    将命令添加到命令队列，由后台消费者线程执行
-
-    Request:
-        {
-            "machine_id": "robot_01",
-            "action": "move",  // move, attack, turn
-            "params": {
-                "direction": [1, 0, 0],
-                "distance": 1
-            }
-        }
-
-    Response:
-        {
-            "success": true,
-            "message": "Command enqueued"
-        }
-    """
+@world_bp.route("/machines/<machine_id>/actions", methods=["POST"])
+def machine_action(machine_id):
+    """Enqueue an action for a machine."""
     data = request.get_json()
-    machine_id = data.get('machine_id')
-    action = data.get('action')
-    params = data.get('params', {})
+    if not data:
+        return error_response(EC.VALIDATION_ERROR, "Request body is required")
 
-    if not machine_id or not action:
-        return jsonify({'success': False, 'error': 'machine_id and action are required'}), 400
+    try:
+        req = MachineActionRequest(**data)
+    except Exception as e:
+        return error_response(EC.VALIDATION_ERROR, str(e))
 
-    # 将命令添加到队列
-    result = world_service.enqueue_command(machine_id, action, params)
+    result = world_service.enqueue_command(machine_id, req.action, req.params)
 
-    if result.get('success'):
-        return jsonify(result)
-    return jsonify(result), 400
+    if result.get("success"):
+        return success_response({"message": "Command enqueued"})
+
+    err = result.get("error", "Unknown error")
+    code = EC.MACHINE_NOT_FOUND if "not found" in err.lower() else EC.COMMAND_QUEUE_FULL
+    return error_response(code, err)
 
 
-@world_bp.route('/save_world', methods=['POST'])
+@world_bp.route("/state", methods=["POST"])
 def save_world():
-    """
-    持久化世界状态
-
-    Response:
-        {
-            "success": true,
-            "message": "World saved"
-        }
-    """
-    success = world_service.save_world()
-    if success:
-        return jsonify({'success': True, 'message': 'World saved'})
-    return jsonify({'success': False, 'error': 'Failed to save world'}), 500
+    """Persist world state to disk."""
+    if world_service.save_world():
+        return success_response({"message": "World saved"})
+    return error_response(EC.INTERNAL_ERROR, "Failed to save world", 500)
 
 
-@world_bp.route('/machine_view/<machine_id>', methods=['GET'])
+@world_bp.route("/machines/<machine_id>/view", methods=["GET"])
 def machine_view(machine_id):
-    """
-    获取机器人视野
-
-    Response:
-        {
-            "machine_id": "robot_01",
-            "center": [0, 0],
-            "view_size": 3,
-            "cells": [[...], [...], ...]
-        }
-    """
+    """Get a machine's field-of-view grid."""
     result = world_service.get_machine_view(machine_id)
     if result:
-        return jsonify(result)
-    return jsonify({'error': 'Machine not found'}), 404
+        return success_response(result)
+    return error_response(EC.MACHINE_NOT_FOUND, f"Machine {machine_id} not found", 404)
 
 
-# ==================== 前端数据接口 ====================
+@world_bp.route("/view", methods=["GET"])
+def get_view():
+    """Get fog-of-war filtered world data for a player."""
+    human_id = request.args.get("human_id")
+    if not human_id:
+        return error_response(EC.VALIDATION_ERROR, "human_id query parameter is required")
+    result = world_service.get_view_for_human(human_id)
+    return success_response(result)
 
-@world_bp.route('/machines', methods=['GET'])
+
+# --------------- frontend data endpoints ---------------
+@world_bp.route("/machines", methods=["GET"])
 def get_machines():
-    """
-    获取所有机器人数据（前端渲染用）
-
-    Response:
-        [
-            {
-                "machine_id": "robot_01",
-                "position": [0, 0, 0],
-                "life_value": 10,
-                "machine_type": "worker",
-                "owner": "human_01",
-                "status": "active",
-                "last_action": "",
-                "size": 1.0,
-                "facing_direction": [1.0, 0.0],
-                "view_size": 3,
-                "visibility_radius": 3
-            },
-            ...
-        ]
-    """
-    machines = world_service.get_machines_for_frontend()
-    return jsonify(machines)
+    """List all machines (paginated, frontend format)."""
+    page, limit = get_pagination_params()
+    all_machines = world_service.get_machines_for_frontend()
+    total = len(all_machines)
+    start = (page - 1) * limit
+    items = all_machines[start : start + limit]
+    return success_response(paginated_response(items, total, page, limit))
 
 
-@world_bp.route('/obstacles', methods=['GET'])
+@world_bp.route("/obstacles", methods=["GET"])
 def get_obstacles():
-    """
-    获取所有障碍物数据（前端渲染用）
-
-    Response:
-        [
-            {
-                "obstacle_id": "obstacle_01",
-                "position": [5, 5, 0],
-                "size": 1.0,
-                "obstacle_type": "static"
-            },
-            ...
-        ]
-    """
+    """List all obstacles (frontend format)."""
     obstacles = world_service.get_obstacles_for_frontend()
-    return jsonify(obstacles)
+    return success_response(obstacles)
 
 
-# ==================== 内部调试接口（可选，生产环境可移除）====================
+@world_bp.route("/carried-resources", methods=["GET"])
+def get_carried_resources():
+    """List all carried resources (frontend format)."""
+    resources = world_service.get_carried_resources_for_frontend()
+    return success_response(resources)
 
-@world_bp.route('/debug/machines', methods=['GET'])
+
+# --------------- debug endpoints ---------------
+
+@world_bp.route("/debug/machines", methods=["GET"])
 def debug_get_machines():
-    """调试用：获取所有机器人（原始格式）"""
-    return jsonify(world_service.get_all_machines())
+    """Debug: get all machines in raw format."""
+    return success_response(world_service.get_all_machines())
 
 
-@world_bp.route('/debug/obstacles', methods=['GET'])
+@world_bp.route("/debug/obstacles", methods=["GET"])
 def debug_get_obstacles():
-    """调试用：获取所有障碍物（原始格式）"""
-    return jsonify(world_service.get_all_obstacles())
+    """Debug: get all obstacles in raw format."""
+    return success_response(world_service.get_all_obstacles())
 
 
-@world_bp.route('/debug/reset', methods=['POST'])
+@world_bp.route("/debug/reset", methods=["POST"])
 def debug_reset():
-    """调试用：重置世界"""
+    """Debug: reset the world."""
     result = world_service.reset_world()
-    return jsonify({'success': True, 'stats': result})
+    return success_response(result)

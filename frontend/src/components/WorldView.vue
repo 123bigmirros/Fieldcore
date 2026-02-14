@@ -1,25 +1,34 @@
 <template>
   <div class="world-container">
     <div class="world-grid">
-      <!-- 障碍物 -->
+      <!-- Obstacles -->
       <GameObject
-        v-for="obstacle in visibleObstacles"
+        v-for="obstacle in obstacles"
         :key="obstacle.obstacle_id"
         :object="obstacle"
         :transformer="transformer"
         type="obstacle"
       />
 
-      <!-- 机器人 -->
+      <!-- Carried resources -->
       <GameObject
-        v-for="machine in visibleMachines"
+        v-for="(res, idx) in carriedResources"
+        :key="'carried-' + res.holder_id + '-' + res.slot"
+        :object="res"
+        :transformer="transformer"
+        type="carried_resource"
+      />
+
+      <!-- Machines -->
+      <GameObject
+        v-for="machine in machines"
         :key="machine.machine_id"
         :object="machine"
         :transformer="transformer"
         type="machine"
       />
 
-      <!-- 激光特效 -->
+      <!-- Laser effects -->
       <LaserBeam
         v-for="laser in activeLasers"
         :key="'laser-' + laser.id"
@@ -27,39 +36,38 @@
         :transformer="transformer"
       />
 
-      <!-- 网格辅助线 -->
+      <!-- Fog of war -->
+      <FogOfWar
+        :my-machines="myMachines"
+        :transformer="transformer"
+      />
+
+      <!-- Grid overlay -->
       <div v-if="showGrid" class="grid-overlay"></div>
     </div>
 
-    <!-- 命令面板 -->
-    <CommandPanel :human-id="humanId" />
+    <!-- Command panel -->
+    <CommandPanel :human-id="humanId" :api-key="apiKey" />
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
 import GameObject from './GameObject.vue'
 import LaserBeam from './LaserBeam.vue'
 import CommandPanel from './CommandPanel.vue'
+import FogOfWar from './FogOfWar.vue'
 
-const props = defineProps({
+defineProps({
   machines: Array,
   obstacles: Array,
+  carriedResources: Array,
   activeLasers: Array,
   transformer: Object,
-  isPositionVisible: Function,
   showGrid: Boolean,
   myMachines: Array,
-  humanId: String
+  humanId: String,
+  apiKey: String
 })
-
-const visibleMachines = computed(() =>
-  props.machines.filter(m => props.isPositionVisible(m.position, props.myMachines))
-)
-
-const visibleObstacles = computed(() =>
-  props.obstacles.filter(o => props.isPositionVisible(o.position, props.myMachines))
-)
 </script>
 
 <style scoped>
@@ -97,4 +105,3 @@ const visibleObstacles = computed(() =>
   z-index: 0;
 }
 </style>
-

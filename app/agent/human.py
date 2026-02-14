@@ -1,5 +1,5 @@
 """
-Human Agent - 智能指挥官，负责分解任务并协调多个机器人完成任务
+Human Agent — intelligent commander that decomposes tasks and coordinates machines.
 """
 
 import json
@@ -19,17 +19,17 @@ from app.prompt.human import (
     MACHINE_DISCOVERY_PROMPT
 )
 
-# MCP 服务器地址（world_service 由 run_mcp_server.py 维护）
-MCP_SERVER_URL = "http://localhost:8003"
+# World 服务器地址（机器人注册等操作直接发到 World Server）
+WORLD_SERVER_URL = "http://localhost:8005"
 
 
 class HumanAgent(MCPAgent):
     """
-    智能Human Agent - 直接创建和管理Machine Agent
+    Intelligent Human Agent — creates and manages Machine Agents directly.
     """
 
     name: str = "human_commander"
-    description: str = "智能指挥官，负责协调和控制多个机器人完成复杂任务"
+    description: str = "Intelligent commander that coordinates machines to complete tasks"
 
     # 使用prompt文件中的提示词
     system_prompt: str = SYSTEM_PROMPT
@@ -51,70 +51,80 @@ class HumanAgent(MCPAgent):
                  machine_count: int = 3,
                  **kwargs):
         """
-        直接初始化 - 不需要判断变量
+        Initialize the Human Agent.
 
         Args:
-            human_id: 指挥官ID，可选
-            machine_count: 要创建的机器人数量
+            human_id: Commander ID, optional
+            machine_count: Number of machines to create
         """
         super().__init__(**kwargs)
 
         if human_id:
             self.human_id = human_id
 
-        # 存储machine_count供initialize使用
+        # Store machine_count for initialize
         self.machine_count = machine_count
 
-        logger.info(f"🤖 Human Commander {self.human_id} 已创建")
+        # Format system_prompt with actual human_id and machine info
+        machine_ids = ", ".join(
+            f"{self.human_id}_robot_{i:02d}" for i in range(1, machine_count + 1)
+        )
+        self.system_prompt = SYSTEM_PROMPT.format(
+            human_id=self.human_id,
+            machine_count=machine_count,
+            machine_ids=machine_ids,
+        )
+
+        logger.info(f"Human Commander {self.human_id} created")
         self.refresh_global_map()
 
     async def initialize(self, **kwargs) -> None:
         """
-        初始化流程 - 连接到MCP服务器
+        Initialize — connect to MCP server.
         """
-        # HTTP API连接
+        # HTTP API connection
         if not kwargs or kwargs.get("connection_type") == "http_api":
             kwargs = {
                 "connection_type": "http_api",
-                "server_url": "http://localhost:8003"
+                "server_url": "http://localhost:8003",
             }
 
-        # 初始化MCP连接
+        # Initialize MCP connection
         await super().initialize(**kwargs)
 
-        # 动态添加工具信息到系统消息
+        # Dynamically add tool info to system message
         await self._update_system_message_with_tool_details()
 
-        logger.info(f"✅ Human Commander {self.human_id} 初始化完成")
+        logger.info(f"Human Commander {self.human_id} initialized")
 
     async def _update_system_message_with_tool_details(self) -> None:
-        """动态更新系统消息，添加工具信息"""
+        """Dynamically update system message with tool details."""
         if not self.mcp_clients or not self.mcp_clients.tool_map:
             return
-        # 生成工具列表，只显示Human Agent专用工具
+        # Generate tool list, only show Human Agent tools
         tools_list = []
         for tool_name, tool_info in self.mcp_clients.tool_map.items():
-            # 只显示以human_开头的工具
+            # Only show tools prefixed with human_
             if tool_name.startswith('human_') or tool_name.startswith('mcp_python_human_'):
-                # 兼容两种工具格式：字典和HTTPMCPTool对象
+                # Compatible with both dict and HTTPMCPTool formats
                 if hasattr(tool_info, 'description'):
                     description = tool_info.description
                     tools_list.append(f"- {tool_name}: {description}")
         tools_text = "\n".join(tools_list)
-        # 更新系统消息
+        # Replace the first system message (tool info) with enriched version
         if self.memory.messages and self.memory.messages[0].role == "system":
-            content = self.memory.messages[0].content
-            base_prompt = content.split("\n\nAvailable MCP tools:")[0]
-            new_content = f"{base_prompt}\n\n🔧 当前可用工具:\n{tools_text}"
             from app.schema import Message
+            tool_names = list(self.mcp_clients.tool_map.keys())
+            tools_info = ", ".join(tool_names)
+            new_content = f"🔧 当前可用工具:\n{tools_text}\n\nAvailable MCP tools: {tools_info}"
             self.memory.messages[0] = Message.system_message(new_content)
 
     async def create_machine_at_position(self, machine_id: str, position: list) -> bool:
-        """在指定位置创建单个机器人"""
+        """Create a single machine at the specified position."""
         try:
-            # 通过 HTTP API 注册机器人到 MCP 服务器
+            # 通过 HTTP API 注册机器人到 World Server
             resp = requests.post(
-                f"{MCP_SERVER_URL}/mcp/machines",
+                f"{WORLD_SERVER_URL}/api/v1/world/machines",
                 json={
                     "machine_id": machine_id,
                     "position": position,
@@ -129,64 +139,59 @@ class HumanAgent(MCPAgent):
             )
             result = resp.json()
 
-            if result.get('success'):
-                logger.info(f"  ✅ 创建机器人: {machine_id} 在位置 {position}")
+            # Check the response envelope
+            data = result.get("data", result)
+            if result.get("success") or data.get("machine_id"):
+                logger.info(f"  Created machine: {machine_id} at position {position}")
                 self._map_manager.register_machine(machine_id, self._extract_xy(position))
                 self.refresh_global_map()
                 return True
             else:
-                logger.error(f"创建机器人 {machine_id} 失败: {result.get('error', 'Unknown error')}")
+                logger.error(f"Failed to create machine {machine_id}: {result.get('error', 'Unknown error')}")
                 return False
 
         except Exception as e:
-            logger.error(f"创建机器人 {machine_id} 失败: {e}")
+            logger.error(f"Failed to create machine {machine_id}: {e}")
             return False
 
 
 
 
     async def call_tool(self, tool_name: str, **kwargs) -> Any:
-        """调用工具，自动添加caller_id"""
+        """Call a tool, automatically adding caller_id."""
         kwargs["caller_id"] = self.human_id
         return await super().call_tool(tool_name, **kwargs)
 
 
 
     async def run(self, request: Optional[str] = None) -> str:
-        """
-        直接处理自然语言指令
-        """
+        """Process a natural language instruction."""
         try:
-            logger.info(f"🎯 Human Commander {self.human_id} 接收任务: {request}")
+            logger.info(f"Human Commander {self.human_id} received task: {request}")
             self.refresh_global_map()
 
             # 使用父类的智能执行
             result = await super().run(request)
 
-            logger.info(f"✅ Human Commander {self.human_id} 任务完成")
+            logger.info(f"Human Commander {self.human_id} task completed")
             self.refresh_global_map()
             return result
 
         except Exception as e:
-            logger.error(f"❌ Human Commander {self.human_id} 执行错误: {e}")
-            return f"Human Commander {self.human_id} 遇到错误: {str(e)}"
-
-    # 删除update_machine_cache方法 - 不需要缓存，直接通过工具获取
-
-    # 删除recycle_all_machines方法 - 占位符方法，无实际作用
+            logger.error(f"Human Commander {self.human_id} execution error: {e}")
+            return f"Human Commander {self.human_id} encountered an error: {str(e)}"
 
     async def cleanup(self, *args, **kwargs):
-        """清理资源 - 空实现，避免自动删除机器人"""
-        # 不做任何实际清理，避免自动删除机器人
+        """Clean up resources — no-op to avoid auto-deleting machines."""
         pass
 
     def refresh_global_map(self) -> None:
-        """刷新全局地图快照供Human Agent使用。"""
+        """Refresh the global map snapshot for the Human Agent."""
         self.global_map = self._map_manager.get_global_map_snapshot()
 
     @staticmethod
     def _extract_xy(position: List[float]) -> Tuple[float, float]:
-        """从输入位置中提取平面坐标。"""
+        """Extract 2D coordinates from a position vector."""
         if not position:
             return 0.0, 0.0
         x_coord = float(position[0])

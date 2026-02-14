@@ -1,21 +1,96 @@
-# OpenManus API 设计
+# OpenManus API Reference
 
-## agent_controller (端口: 8004)
+All endpoints return a unified response envelope:
 
-管理 Human 和 Machine 的创建、查询、更新和命令执行。
+```json
+{
+  "success": true,
+  "data": { ... },
+  "error": null
+}
+```
 
-| 接口            | 方法   | 路径                    | 描述            |
-| --------------- | ------ | ----------------------- | --------------- |
-| agentCreate     | POST   | /api/agent              | 创建 Agent      |
-| getAgentInfo    | GET    | /api/agent/<id>         | 获取 Agent 信息 |
-| updateAgentInfo | PUT    | /api/agent/<id>         | 更新 Agent 信息 |
-| sendCmd         | POST   | /api/agent/<id>/command | 发送命令        |
-| deleteAgent     | DELETE | /api/agent/<id>         | 删除 Agent      |
-| listAgents      | GET    | /api/agent              | 获取所有 Agent  |
+Error responses:
 
-### agentCreate 请求
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "MACHINE_NOT_FOUND",
+    "message": "Machine robot_99 not found"
+  }
+}
+```
 
-创建 Human:
+## Error Codes
+
+| Code | Description |
+|------|-------------|
+| VALIDATION_ERROR | Request body failed validation |
+| API_KEY_MISSING | Authorization header not provided |
+| API_KEY_INVALID | API key is not valid |
+| BEARER_PREFIX_REQUIRED | Authorization header must start with "Bearer " |
+| AGENT_NOT_FOUND | Agent does not exist |
+| INVALID_AGENT_TYPE | agent_type must be "human" or "machine" |
+| OWNER_NOT_FOUND | Owner (human) does not exist |
+| MACHINE_NOT_FOUND | Machine does not exist |
+| MACHINE_ALREADY_EXISTS | Machine ID already registered |
+| POSITION_COLLISION | Position is occupied |
+| COMMAND_QUEUE_FULL | Command queue is full |
+| TOOL_NOT_FOUND | MCP tool does not exist |
+| TOOL_EXECUTION_FAILED | MCP tool execution failed |
+| TASK_NOT_FOUND | Async task does not exist |
+| INTERNAL_ERROR | Unexpected server error |
+
+---
+
+## Authentication (Agent Server, port 8004)
+
+All agent and proxy endpoints require `Authorization: Bearer <api_key>` header.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/auth/register` | Register and get API key |
+| GET | `/api/v1/auth/verify` | Verify API key |
+
+### POST /api/v1/auth/register
+
+Request:
+```json
+{
+  "agent_id": "human_01"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "api_key": "sk-xxxxxxxx",
+    "agent_id": "human_01"
+  },
+  "error": null
+}
+```
+
+---
+
+## Agents (Agent Server, port 8004)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/agents` | Create agent |
+| GET | `/api/v1/agents` | List agents (paginated) |
+| GET | `/api/v1/agents/<id>` | Get agent info |
+| PUT | `/api/v1/agents/<id>` | Update agent |
+| POST | `/api/v1/agents/<id>/commands` | Send command |
+| GET | `/api/v1/agents/tasks/<task_id>` | Get task status |
+| DELETE | `/api/v1/agents/<id>` | Delete agent |
+
+### POST /api/v1/agents — Create Human
+
 ```json
 {
   "agent_type": "human",
@@ -24,51 +99,18 @@
 }
 ```
 
-创建 Machine (必须指定 owner):
+### POST /api/v1/agents — Create Machine
+
 ```json
 {
   "agent_type": "machine",
   "agent_id": "robot_01",
   "owner_id": "human_01",
-  "position": [0, 0, 0]  // 可选，不提供则自动寻找
+  "position": [0, 0, 0]
 }
 ```
 
-### getAgentInfo 响应
-
-Human:
-```json
-{
-  "agent_id": "human_01",
-  "agent_type": "human",
-  "status": "active",
-  "machine_ids": ["robot_01", "robot_02"]
-}
-```
-
-Machine:
-```json
-{
-  "agent_id": "robot_01",
-  "agent_type": "machine",
-  "owner_id": "human_01",
-  "position": [0, 0, 0],
-  "life_value": 10,
-  "status": "active"
-}
-```
-
-### updateAgentInfo 请求
-
-更新 Machine:
-```json
-{
-  "position": [1, 2, 0],
-  "life_value": 15
-}
-```
-
-### sendCmd 请求
+### POST /api/v1/agents/<id>/commands
 
 ```json
 {
@@ -76,79 +118,148 @@ Machine:
 }
 ```
 
----
+### GET /api/v1/agents?page=1&limit=10
 
-## mcp_controller (端口: 8003)
-
-MCP 工具服务，提供工具查询和调用。**工具通过命名约定区分**。
-
-| 接口       | 方法 | 路径                | 描述         |
-| ---------- | ---- | ------------------- | ------------ |
-| list_tools | GET  | /api/mcp/list_tools | 获取工具列表 |
-| call_tool  | POST | /api/mcp/call_tool  | 调用工具     |
-
-### 工具命名约定
-
-- **Human 工具** (以 `human_` 开头): Human Agent 使用
-  - `human_send_short_command` - 发送短期命令
-  - `human_send_long_command` - 发送长期命令
-
-- **Machine 工具** (以 `machine_` 开头): Machine Agent 使用
-  - `machine_check_environment` - 环境检测
-  - `machine_step_movement` - 移动
-  - `machine_laser_attack` - 攻击
-  - `machine_get_self_status` - 获取状态
-
----
-
-## world_controller (端口: 8005)
-
-世界管理服务，管理机器人和地图状态。
-
-| 接口             | 方法 | 路径                         | 描述       |
-| ---------------- | ---- | ---------------------------- | ---------- |
-| machine_register | POST | /api/world/machine_register  | 注册机器人 |
-| machine_action   | POST | /api/world/machine_action    | 执行动作   |
-| save_world       | POST | /api/world/save_world        | 保存世界   |
-| machine_view     | GET  | /api/world/machine_view/{id} | 获取视野   |
-
----
-
-## 启动顺序
-
-```bash
-# 1. World Server (必须先启动)
-cd world_server && python main.py
-
-# 2. MCP Server
-python -m mcp_server.main
-
-# 3. Agent Server
-python -m agent_server.main
+Paginated response:
+```json
+{
+  "success": true,
+  "data": {
+    "items": [ ... ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 25,
+      "pages": 3
+    }
+  },
+  "error": null
+}
 ```
 
-## 目录结构
+---
+
+## World Proxy (Agent Server, port 8004)
+
+Frontend calls the Agent Server proxy instead of the World Server directly.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/world/view?human_id=...` | Fog-of-war filtered view (auth required) |
+
+---
+
+## MCP Tools (MCP Server, port 8003)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/mcp/tools` | List available tools |
+| POST | `/api/v1/mcp/tools/<tool_name>/invoke` | Invoke a tool |
+
+### POST /api/v1/mcp/tools/<tool_name>/invoke
+
+```json
+{
+  "parameters": {
+    "machine_id": "robot_01",
+    "direction": [1, 0, 0]
+  }
+}
+```
+
+### Tool naming convention
+
+- `human_*` — Human Agent tools (e.g. `human_send_short_command`)
+- `machine_*` — Machine Agent tools (e.g. `machine_check_environment`, `machine_step_movement`, `machine_laser_attack`, `machine_get_self_status`)
+
+---
+
+## World (World Server, port 8005)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/world/machines` | Register machine |
+| GET | `/api/v1/world/machines` | List machines (paginated) |
+| POST | `/api/v1/world/machines/<id>/actions` | Execute action |
+| GET | `/api/v1/world/machines/<id>/view` | Get machine field-of-view |
+| POST | `/api/v1/world/state` | Save world state |
+| GET | `/api/v1/world/view` | Fog-of-war view |
+| GET | `/api/v1/world/obstacles` | List obstacles |
+| GET | `/api/v1/world/carried-resources` | List carried resources |
+| GET | `/api/v1/world/debug/machines` | Debug: all machines |
+| GET | `/api/v1/world/debug/obstacles` | Debug: all obstacles |
+| POST | `/api/v1/world/debug/reset` | Debug: reset world |
+
+### POST /api/v1/world/machines
+
+```json
+{
+  "machine_id": "robot_01",
+  "position": [5, 3, 0],
+  "owner": "human_01",
+  "life_value": 10,
+  "machine_type": "worker",
+  "size": 1.0,
+  "facing_direction": [1.0, 0.0],
+  "view_size": 3
+}
+```
+
+### POST /api/v1/world/machines/<id>/actions
+
+```json
+{
+  "action": "move",
+  "params": {
+    "direction": [1, 0, 0],
+    "distance": 1
+  }
+}
+```
+
+---
+
+## Startup Order
+
+```bash
+python start_servers.py          # Start all services (ordered)
+python start_servers.py --stop   # Stop all services
+python start_servers.py --status # Check service status
+```
+
+Manual startup (order matters):
+1. World Server: `cd world_server && python main.py`
+2. MCP Server: `cd mcp_server && python main.py`
+3. Agent Server: `cd agent_server && python main.py`
+4. Agent Worker: `cd agent_server && python main.py worker`
+5. Frontend: `cd frontend && npm run dev`
+
+## Directory Structure
 
 ```
 OpenManus/
-├── world_server/          # 世界管理微服务
+├── shared/                # Shared utilities (response, pagination, validation, error codes)
+├── world_server/          # World management microservice
 │   ├── app/
 │   │   ├── controllers/
 │   │   ├── services/
 │   │   └── models/
 │   └── main.py
-├── mcp_server/            # MCP 工具微服务
+├── mcp_server/            # MCP tool microservice
 │   ├── app/
 │   │   ├── controllers/
 │   │   └── services/
 │   └── main.py
-├── agent_server/          # Agent 管理微服务
+├── agent_server/          # Agent management microservice
 │   ├── app/
 │   │   ├── controllers/
 │   │   ├── services/
 │   │   └── models/
 │   └── main.py
-└── app/                   # 共享代码
-    ├── tool/              # 工具定义
-    └── service/           # 客户端
+├── frontend/              # Vue 3 + Vite frontend
+│   └── src/
+└── app/                   # Shared core code
+    ├── agent/             # Agent implementations
+    ├── tool/              # Tool definitions
+    └── service/           # HTTP clients
 ```

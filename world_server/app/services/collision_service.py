@@ -1,25 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-Collision Service - 碰撞检测服务
+Collision Service - Collision detection service
 """
 
 from typing import Dict, Optional
 from ..models import Position
 
 
+# Slot direction offsets
+SLOT_OFFSETS = {
+    "top": (0, 1),
+    "bottom": (0, -1),
+    "left": (-1, 0),
+    "right": (1, 0),
+}
+
+
 class CollisionService:
-    """碰撞检测服务"""
+    """Collision detection service"""
 
     def __init__(self, machines: Dict, obstacles: Dict):
-        """
-        初始化碰撞检测服务
-
-        Args:
-            machines: 机器人字典
-            obstacles: 障碍物字典
-        """
         self._machines = machines
         self._obstacles = obstacles
+
+    @staticmethod
+    def get_slot_world_position(machine: dict, slot: str) -> Position:
+        """Calculate the world position of a slot's resource"""
+        pos = machine['position']
+        dx, dy = SLOT_OFFSETS[slot]
+        return Position(int(pos[0]) + dx, int(pos[1]) + dy, 0)
 
     def check_collision(
         self,
@@ -28,23 +37,17 @@ class CollisionService:
         exclude_id: Optional[str] = None
     ) -> bool:
         """
-        检查位置是否发生碰撞
+        Check if a position has a collision
 
-        Args:
-            position: 要检查的位置
-            size: 物体大小
-            exclude_id: 排除的机器ID（用于检查自身移动）
-
-        Returns:
-            True 如果发生碰撞，False 否则
+        Checks: obstacles, other machines, resources carried by other machines
         """
-        # 检查与障碍物的碰撞
+        # Check collision with obstacles
         for obs in self._obstacles.values():
             obs_pos = Position(*obs['position'])
             if position.distance_to(obs_pos) < max(size, obs['size']) * 0.5:
                 return True
 
-        # 检查与其他机器的碰撞
+        # Check collision with other machines + their carried resources
         for m_id, m in self._machines.items():
             if m_id == exclude_id or m.get('status') != 'active':
                 continue
@@ -52,5 +55,13 @@ class CollisionService:
             if position.distance_to(m_pos) < max(size, m.get('size', 1.0)) * 0.5:
                 return True
 
-        return False
+            # Check resources carried by this machine
+            slots = m.get('slots', {})
+            for slot, resource in slots.items():
+                if resource is None:
+                    continue
+                res_pos = self.get_slot_world_position(m, slot)
+                if position.distance_to(res_pos) < max(size, resource.get('size', 1.0)) * 0.5:
+                    return True
 
+        return False

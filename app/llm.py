@@ -1,4 +1,6 @@
 import math
+import json as json_module
+import requests as sync_requests
 from typing import Dict, List, Optional, Union
 
 import tiktoken
@@ -403,55 +405,95 @@ class LLM:
                 # Raise a special exception that won't be retried
                 raise TokenLimitExceeded(error_message)
 
-            params = {
+            # Build Responses API request (gateway only supports /v1/responses)
+            # Note: this gateway does not support the 'temperature' parameter
+            resp_params = {
                 "model": self.model,
-                "messages": messages,
+                "input": messages,
+                "max_output_tokens": self.max_tokens,
             }
 
-            if self.model in REASONING_MODELS:
-                params["max_completion_tokens"] = self.max_tokens
-            else:
-                params["max_tokens"] = self.max_tokens
-                params["temperature"] = (
-                    temperature if temperature is not None else self.temperature
+            # Extract system messages into instructions
+            system_texts = []
+            input_msgs = []
+            for m in messages:
+                if m.get("role") == "system":
+                    system_texts.append(m.get("content", ""))
+                else:
+                    input_msgs.append(m)
+            if system_texts:
+                resp_params["instructions"] = "\n".join(system_texts)
+                resp_params["input"] = input_msgs
+
+            api_url = f"{self.base_url}/responses"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+
+            if stream:
+                resp_params["stream"] = True
+
+            raw_resp = sync_requests.post(
+                api_url, headers=headers,
+                json=resp_params, timeout=300,
+                stream=stream,
+            )
+
+            if raw_resp.status_code != 200:
+                raise Exception(
+                    f"Responses API error {raw_resp.status_code}: {raw_resp.text[:500]}"
                 )
 
             if not stream:
-                # Non-streaming request
-                response = await self.client.chat.completions.create(
-                    **params, stream=False
-                )
+                resp_data = raw_resp.json()
+                content_text = ""
+                for item in resp_data.get("output", []):
+                    if item.get("type") == "message":
+                        for c in item.get("content", []):
+                            if c.get("type") == "output_text":
+                                content_text += c.get("text", "")
 
-                if not response.choices or not response.choices[0].message.content:
+                if not content_text:
                     raise ValueError("Empty or invalid response from LLM")
 
-                # Update token counts
+                usage = resp_data.get("usage", {})
                 self.update_token_count(
-                    response.usage.prompt_tokens, response.usage.completion_tokens
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
                 )
+                return content_text
 
-                return response.choices[0].message.content
-
-            # Streaming request, For streaming, update estimated token count before making the request
+            # Streaming: parse SSE events
             self.update_token_count(input_tokens)
-
-            response = await self.client.chat.completions.create(**params, stream=True)
-
             collected_messages = []
-            completion_text = ""
-            async for chunk in response:
-                chunk_message = chunk.choices[0].delta.content or ""
-                collected_messages.append(chunk_message)
-                completion_text += chunk_message
-                print(chunk_message, end="", flush=True)
+            for line in raw_resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload.strip() == "[DONE]":
+                    break
+                try:
+                    evt = json_module.loads(payload)
+                    delta = evt.get("delta", "")
+                    if delta:
+                        collected_messages.append(delta)
+                        print(delta, end="", flush=True)
+                    # Also handle output_text.delta type events
+                    if evt.get("type") == "response.output_text.delta":
+                        text = evt.get("delta", "")
+                        if text and text not in collected_messages[-1:]:
+                            collected_messages.append(text)
+                            print(text, end="", flush=True)
+                except (json_module.JSONDecodeError, KeyError):
+                    continue
 
-            print()  # Newline after streaming
+            print()
             full_response = "".join(collected_messages).strip()
             if not full_response:
                 raise ValueError("Empty response from streaming LLM")
 
-            # estimate completion tokens for streaming response
-            completion_tokens = self.count_tokens(completion_text)
+            completion_tokens = self.count_tokens(full_response)
             logger.info(
                 f"Estimated completion tokens for streaming response: {completion_tokens}"
             )
@@ -710,41 +752,133 @@ class LLM:
                     if not isinstance(tool, dict) or "type" not in tool:
                         raise ValueError("Each tool must be a dict with 'type' field")
 
-            # Set up the completion request
-            params = {
+            # Set up the completion request via Responses API
+            # (This gateway only supports /v1/responses, not /v1/chat/completions)
+            resp_params = {
                 "model": self.model,
-                "messages": messages,
-                "tools": tools,
-                "tool_choice": tool_choice,
-                "timeout": timeout,
-                **kwargs,
+                "input": messages,
+                "max_output_tokens": self.max_tokens,
+            }
+            if tools:
+                # Convert Chat Completions tool format to Responses API format
+                # From: {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
+                # To:   {"type": "function", "name": ..., "description": ..., "parameters": ...}
+                resp_tools = []
+                for t in tools:
+                    if t.get("type") == "function" and "function" in t:
+                        func = t["function"]
+                        resp_tools.append({
+                            "type": "function",
+                            "name": func.get("name", ""),
+                            "description": func.get("description", ""),
+                            "parameters": func.get("parameters", {}),
+                        })
+                    else:
+                        resp_tools.append(t)
+                resp_params["tools"] = resp_tools
+
+            # Extract system instructions and convert messages to Responses API format
+            system_texts = []
+            input_items = []
+            for m in messages:
+                role = m.get("role")
+                if role == "system":
+                    system_texts.append(m.get("content", ""))
+                elif role == "assistant":
+                    # If assistant message has tool_calls, convert to function_call items
+                    if m.get("tool_calls"):
+                        # Add text content as a message if present
+                        if m.get("content"):
+                            input_items.append({
+                                "role": "assistant",
+                                "content": m["content"],
+                            })
+                        # Convert each tool_call to a function_call item
+                        for tc in m["tool_calls"]:
+                            func = tc.get("function", {})
+                            input_items.append({
+                                "type": "function_call",
+                                "name": func.get("name", ""),
+                                "arguments": func.get("arguments", "{}"),
+                                "call_id": tc.get("id", ""),
+                            })
+                    else:
+                        input_items.append({
+                            "role": "assistant",
+                            "content": m.get("content", ""),
+                        })
+                elif role == "tool":
+                    # Convert tool result to function_call_output
+                    input_items.append({
+                        "type": "function_call_output",
+                        "call_id": m.get("tool_call_id", ""),
+                        "output": m.get("content", ""),
+                    })
+                else:
+                    # user messages pass through
+                    input_items.append(m)
+
+            if system_texts:
+                resp_params["instructions"] = "\n".join(system_texts)
+            resp_params["input"] = input_items
+
+            api_url = f"{self.base_url}/responses"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
             }
 
-            if self.model in REASONING_MODELS:
-                params["max_completion_tokens"] = self.max_tokens
-            else:
-                params["max_tokens"] = self.max_tokens
-                params["temperature"] = (
-                    temperature if temperature is not None else self.temperature
+            raw_resp = sync_requests.post(
+                api_url, headers=headers,
+                json=resp_params, timeout=timeout,
+            )
+
+            if raw_resp.status_code != 200:
+                raise Exception(
+                    f"Responses API error {raw_resp.status_code}: {raw_resp.text[:500]}"
                 )
 
-            params["stream"] = False  # Always use non-streaming for tool requests
-            response: ChatCompletion = await self.client.chat.completions.create(
-                **params
+            resp_data = raw_resp.json()
+
+            # Convert Responses API output to ChatCompletionMessage
+            content_text = None
+            tool_calls_list = []
+            tc_index = 0
+            for item in resp_data.get("output", []):
+                if item.get("type") == "message":
+                    for c in item.get("content", []):
+                        if c.get("type") == "output_text":
+                            content_text = c.get("text", "")
+                elif item.get("type") == "function_call":
+                    from openai.types.chat.chat_completion_message_tool_call import (
+                        ChatCompletionMessageToolCall, Function,
+                    )
+                    tool_calls_list.append(
+                        ChatCompletionMessageToolCall(
+                            id=item.get("call_id", item.get("id", "")),
+                            type="function",
+                            function=Function(
+                                name=item.get("name", ""),
+                                arguments=item.get("arguments", "{}"),
+                            ),
+                        )
+                    )
+                    tc_index += 1
+
+            result_msg = ChatCompletionMessage(
+                role="assistant",
+                content=content_text,
+                tool_calls=tool_calls_list if tool_calls_list else None,
             )
 
-            # Check if response is valid
-            if not response.choices or not response.choices[0].message:
-                print(response)
-                # raise ValueError("Invalid or empty response from LLM")
-                return None
-
-            # Update token counts
+            # Update token counts from usage
+            usage = resp_data.get("usage", {})
             self.update_token_count(
-                response.usage.prompt_tokens, response.usage.completion_tokens
+                usage.get("input_tokens", 0),
+                usage.get("output_tokens", 0),
             )
 
-            return response.choices[0].message
+            return result_msg
 
         except TokenLimitExceeded:
             # Re-raise token limit errors without logging

@@ -3,17 +3,19 @@ import axios from 'axios'
 import { CONFIG } from '../constants/config'
 
 /**
- * Human 认证管理
+ * Human authentication management
+ * Flow: register -> get api_key -> create agent
  */
 export function useAuth() {
     const humanId = ref(null)
+    const apiKey = ref(null)
     const inputHumanId = ref('')
     const machineCount = ref(3)
     const isCreating = ref(false)
     const loginError = ref('')
 
     /**
-     * 创建 Human
+     * Create Human (two-step flow)
      */
     async function createHuman() {
         if (!inputHumanId.value.trim()) {
@@ -25,23 +27,39 @@ export function useAuth() {
         loginError.value = ''
 
         try {
-            const response = await axios.post(`${CONFIG.API_BASE_URL}/api/humans`, {
-                human_id: inputHumanId.value.trim(),
-                machine_count: machineCount.value
+            // Step 1: Register to get API Key
+            const registerResp = await axios.post(`${CONFIG.API_BASE_URL}/api/v1/auth/register`, {
+                agent_id: inputHumanId.value.trim()
             })
-
-            if (response.data.status === 'success') {
-                humanId.value = inputHumanId.value.trim()
-                inputHumanId.value = ''
-                document.title = `OpenManus - ${humanId.value}`
-
-                console.log(`✅ [${humanId.value}] Human创建成功，机器人数量: ${response.data.actual_count}/${response.data.requested_count}`)
-                return true
+            const respData = registerResp.data.data || registerResp.data
+            const key = respData.api_key
+            if (!key) {
+                loginError.value = '注册失败：未获取到 API Key'
+                return false
             }
-            return false
+            apiKey.value = key
+
+            // Step 2: Create Agent (with API Key)
+            const agentResp = await axios.post(
+                `${CONFIG.API_BASE_URL}/api/v1/agents`,
+                {
+                    agent_type: 'human',
+                    agent_id: inputHumanId.value.trim(),
+                    machine_count: machineCount.value
+                },
+                { headers: { 'Authorization': `Bearer ${key}` } }
+            )
+
+            humanId.value = inputHumanId.value.trim()
+            inputHumanId.value = ''
+            document.title = `OpenManus - ${humanId.value}`
+
+            console.log(`[${humanId.value}] Human created successfully`)
+            return true
         } catch (error) {
-            console.error('创建Human失败:', error)
-            loginError.value = error.response?.data?.error || '创建失败，请重试'
+            console.error('Failed to create Human:', error)
+            const errData = error.response?.data?.error
+            loginError.value = (errData && errData.message) || errData || '创建失败，请重试'
             return false
         } finally {
             isCreating.value = false
@@ -49,24 +67,28 @@ export function useAuth() {
     }
 
     /**
-     * 退出系统
+     * Exit system
      */
     async function exitSystem() {
         if (!humanId.value) return
 
         try {
-            await axios.delete(`${CONFIG.API_BASE_URL}/api/humans/${humanId.value}`)
-            console.log(`✅ Human ${humanId.value} 已删除`)
+            await axios.delete(`${CONFIG.API_BASE_URL}/api/v1/agents/${humanId.value}`, {
+                headers: { 'Authorization': `Bearer ${apiKey.value}` }
+            })
+            console.log(`Human ${humanId.value} deleted`)
         } catch (error) {
-            console.error('删除Human失败:', error)
+            console.error('Failed to delete Human:', error)
         } finally {
             humanId.value = null
+            apiKey.value = null
             document.title = 'OpenManus'
         }
     }
 
     return {
         humanId,
+        apiKey,
         inputHumanId,
         machineCount,
         isCreating,
@@ -75,4 +97,3 @@ export function useAuth() {
         exitSystem
     }
 }
-

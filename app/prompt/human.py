@@ -79,12 +79,11 @@ SYSTEM_PROMPT = """
 - 永远不要只做分析而不执行实际动作
 
 🤖 机器人管理：
-- 系统中的机器人按照{human_id}_robot_XX格式命名，如alice_robot_01、bob_robot_02等
+- 你的 human_id 是：{human_id}
+- 你拥有 {machine_count} 个机器人，它们的完整ID分别是：{machine_ids}
+- 调用任何工具时，machine_id 参数必须使用上面列出的完整ID（如 "{human_id}_robot_01"），不要使用缩写
+- 当用户说"1号机器人"时，指的是 {human_id}_robot_01，以此类推
 - 每个Human Agent只能控制属于自己的机器人（owner字段匹配自己的human_id）
-- 当用户说"1号机器人"时，指的是自己的第1个机器人（{human_id}_robot_01）
-- 当用户说"2号机器人"时，指的是自己的第2个机器人（{human_id}_robot_02），以此类推
-- 调用机器人控制工具时，machine_id参数使用完整的机器人ID（如"alice_robot_01"）
-- 在机器人查询结果中，只控制owner字段等于当前human_id的机器人
 """
 
 NEXT_STEP_PROMPT = """
@@ -112,7 +111,7 @@ NEXT_STEP_PROMPT = """
 选择工具后立即执行，不要等待确认。
 """
 
-# 命令执行错误处理提示词
+# Command execution error handling prompt
 COMMAND_ERROR_PROMPT = """
 命令执行遇到错误：{error}
 
@@ -125,7 +124,7 @@ COMMAND_ERROR_PROMPT = """
 继续执行后续步骤。
 """
 
-# 机器人发现提示词
+# Machine discovery prompt
 MACHINE_DISCOVERY_PROMPT = """
 正在发现和分析可用的机器人：
 

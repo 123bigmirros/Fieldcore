@@ -1,63 +1,51 @@
 # -*- coding: utf-8 -*-
-"""
-认证装饰器 - 用于保护需要 API Key 验证的接口
-"""
+"""Authentication decorator — protects endpoints requiring a valid API key."""
 
+import sys
+import os
 from functools import wraps
-from flask import request, jsonify
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from flask import request
+
+from shared.response import error_response
+from shared import error_codes as EC
 from agent_server.app.services.auth_service import auth_service
 
 
 def require_api_key(f):
-    """
-    装饰器：要求请求包含有效的 API Key
+    """Decorator: require a valid Bearer API key in the Authorization header."""
 
-    使用方式:
-        @agent_bp.route('/api/agent', methods=['POST'])
-        @require_api_key
-        def agent_create():
-            ...
-    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         from app.logger import logger
-        logger.info(f"🔐 API Key 验证: {request.method} {request.path}")
 
-        # 从请求头或请求体中获取 API Key
-        api_key = None
+        logger.info(f"API key auth: {request.method} {request.path}")
 
-        # 优先从请求头获取 (推荐方式)
-        api_key = request.headers.get('Authorization')
-        if api_key:
-            # 支持 "Bearer sk-xxx" 或 "sk-xxx" 格式
-            if api_key.startswith('Bearer '):
-                api_key = api_key[7:]
-        else:
-            # 从请求体获取 (兼容方式)
-            data = request.get_json() or {}
-            api_key = data.get('api_key')
+        auth_header = request.headers.get("Authorization")
 
-        if not api_key:
-            logger.warning("❌ API Key 缺失")
-            return jsonify({
-                'success': False,
-                'error': 'API key is required. Please provide it in Authorization header or request body.'
-            }), 401
+        if not auth_header:
+            logger.warning("API key missing")
+            return error_response(EC.API_KEY_MISSING, "Authorization header is required", 401)
 
-        # 验证 API Key
+        if not auth_header.startswith("Bearer "):
+            logger.warning("Bearer prefix missing")
+            return error_response(
+                EC.BEARER_PREFIX_REQUIRED,
+                "Authorization header must use 'Bearer <key>' format",
+                401,
+            )
+
+        api_key = auth_header[7:]
+
         is_valid, user_id = auth_service.verify_api_key(api_key)
         if not is_valid:
-            logger.warning(f"❌ API Key 验证失败")
-            return jsonify({
-                'success': False,
-                'error': 'Invalid API key'
-            }), 401
+            logger.warning("API key invalid")
+            return error_response(EC.API_KEY_INVALID, "Invalid API key", 401)
 
-        logger.info(f"✅ API Key 验证成功: user_id={user_id}")
-        # 将 user_id 添加到 kwargs，供视图函数使用
-        kwargs['user_id'] = user_id
+        logger.info(f"API key verified: user_id={user_id}")
+        kwargs["user_id"] = user_id
         return f(*args, **kwargs)
 
     return decorated_function
-

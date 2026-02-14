@@ -1,6 +1,6 @@
 <template>
   <div id="app">
-    <!-- 登录界面 -->
+    <!-- Login view -->
     <LoginView
       v-if="!auth.humanId.value"
       v-model:input-human-id="auth.inputHumanId.value"
@@ -10,18 +10,19 @@
       @submit="handleLogin"
     />
 
-    <!-- 主界面 -->
+    <!-- Main interface -->
     <div v-else class="main-interface">
-      <!-- 世界视图 -->
+      <!-- World view -->
       <WorldView
         :machines="worldData.machines.value"
         :obstacles="worldData.obstacles.value"
+        :carried-resources="worldData.carriedResources.value"
         :active-lasers="laser.activeLasers.value"
         :transformer="viewport.transformer.value"
-        :is-position-visible="viewport.isPositionVisible"
         :show-grid="keyboard.showGrid.value"
         :my-machines="worldData.myMachines.value"
         :human-id="auth.humanId.value"
+        :api-key="auth.apiKey.value"
       />
 
     </div>
@@ -39,9 +40,9 @@ import { useViewport } from './composables/useViewport'
 import { useLaser } from './composables/useLaser'
 import { useKeyboard } from './composables/useKeyboard'
 
-// 状态管理
+// State management
 const auth = useAuth()
-const worldData = useWorldData(auth.humanId)
+const worldData = useWorldData(auth.humanId, auth.apiKey)
 const viewport = useViewport()
 const laser = useLaser(
   worldData.machines,
@@ -49,18 +50,18 @@ const laser = useLaser(
   viewport.removeLaserVision
 )
 
-// 键盘控制
+// Keyboard controls
 const keyboard = useKeyboard({
   onDebug: showDebugInfo,
   onResize: forceUpdate
 })
 
-// ============= 生命周期 =============
+// ============= Lifecycle =============
 onBeforeUnmount(() => {
   worldData.stopAutoRefresh()
 })
 
-// ============= 事件处理 =============
+// ============= Event handlers =============
 async function handleLogin() {
   const success = await auth.createHuman()
   if (success) {
@@ -69,43 +70,43 @@ async function handleLogin() {
 }
 
 function forceUpdate() {
-  // 强制重新渲染
+  // Force re-render
 }
 
-// ============= 调试工具 =============
+// ============= Debug tools =============
 function showDebugInfo() {
-  console.log('=== 🔍 调试信息 ===')
-  console.log(`机器人数量: ${worldData.machines.value.length}`)
-  console.log(`障碍物数量: ${worldData.obstacles.value.length}`)
-  console.log(`当前激光视野区域: ${viewport.laserVisionAreas.value.length}`)
+  console.log('=== Debug Info ===')
+  console.log(`Machines: ${worldData.machines.value.length}`)
+  console.log(`Obstacles: ${worldData.obstacles.value.length}`)
+  console.log(`Laser vision areas: ${viewport.laserVisionAreas.value.length}`)
 
   const myMachines = worldData.myMachines.value
   const otherMachines = worldData.machines.value.filter(m => !m.isMyMachine)
 
-  console.log(`\n=== 👁️ 视野系统状态 ===`)
-  console.log(`我的机器人(提供视野): ${myMachines.length}个`)
+  console.log(`\n=== Vision System ===`)
+  console.log(`My machines (provide vision): ${myMachines.length}`)
   myMachines.forEach(m => {
-    console.log(`  🤖 ${m.machine_id}: (${m.position[0]}, ${m.position[1]}) 视野${m.visibility_radius}格`)
+    console.log(`  ${m.machine_id}: (${m.position[0]}, ${m.position[1]}) vision ${m.visibility_radius} cells`)
   })
 
-  console.log(`他人的机器人: ${otherMachines.length}个`)
+  console.log(`Other machines: ${otherMachines.length}`)
   otherMachines.forEach(m => {
-    const visible = viewport.isPositionVisible(m.position, myMachines) ? '可见' : '不可见'
-    console.log(`  👻 ${m.machine_id}: (${m.position[0]}, ${m.position[1]}) ${visible}`)
+    const visible = viewport.isPositionVisible(m.position, myMachines) ? 'visible' : 'hidden'
+    console.log(`  ${m.machine_id}: (${m.position[0]}, ${m.position[1]}) ${visible}`)
   })
 
-  console.log('\n=== 🧪 激光系统状态 ===')
-  console.log(`活跃激光数量: ${laser.activeLasers.value.length}`)
-  console.log(`激光视野区域: ${viewport.laserVisionAreas.value.length}`)
+  console.log('\n=== Laser System ===')
+  console.log(`Active lasers: ${laser.activeLasers.value.length}`)
+  console.log(`Laser vision areas: ${viewport.laserVisionAreas.value.length}`)
   console.log('===============')
 }
 
-// 监听登录状态
+// Watch login state
 watch(() => auth.humanId.value, (newVal, oldVal) => {
   if (newVal && !oldVal) {
-    console.log(`✅ 登录成功: ${newVal}`)
+    console.log(`Logged in: ${newVal}`)
   } else if (!newVal && oldVal) {
-    console.log(`👋 退出登录: ${oldVal}`)
+    console.log(`Logged out: ${oldVal}`)
   }
 })
 </script>

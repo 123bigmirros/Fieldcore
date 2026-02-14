@@ -1,17 +1,17 @@
 /**
- * 数据解析工具
- * 处理后端返回的多层JSON数据
+ * Data parsing utilities
+ * Handles multi-layered JSON data returned from the backend
  */
 
 /**
- * 解析API返回的数据
- * @param {*} data - 原始数据
- * @returns {Array|Object} 解析后的数据
+ * Parse data returned from the API
+ * @param {*} data - Raw data
+ * @returns {Array|Object} Parsed data
  */
 export function parseApiData(data) {
     let parsed = data
 
-    // 第一层解析：HTTP响应（字符串化的JSON）
+    // First layer: parse HTTP response (stringified JSON)
     if (typeof parsed === 'string') {
         try {
             parsed = JSON.parse(parsed)
@@ -20,7 +20,7 @@ export function parseApiData(data) {
         }
     }
 
-    // 第二层解析：提取output中的实际数据
+    // Second layer: extract actual data from the output field
     if (parsed?.output && typeof parsed.output === 'string') {
         try {
             parsed = JSON.parse(parsed.output)
@@ -29,7 +29,7 @@ export function parseApiData(data) {
         }
     }
 
-    // 转换为数组格式
+    // Convert to array format
     if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
         parsed = Object.values(parsed)
     }
@@ -38,9 +38,9 @@ export function parseApiData(data) {
 }
 
 /**
- * 从last_action中解析激光攻击数据
- * @param {Object} machine - 机器人对象
- * @returns {Object|null} 激光数据
+ * Parse laser attack data from last_action
+ * @param {Object} machine - Machine object
+ * @returns {Object|null} Laser data
  */
 export function parseLaserAction(machine) {
     if (!machine.last_action?.includes('laser_attack')) {
@@ -50,18 +50,18 @@ export function parseLaserAction(machine) {
     const timestamp = machine.last_action.match(/time:(\d+)/)
     const effectId = timestamp ? timestamp[1] : Date.now().toString()
 
-    // 尝试从last_action中提取后端计算的完整结果
+    // Try to extract the full backend-computed result from last_action
     const resultMatch = machine.last_action.match(/result_(.+)$/)
     if (resultMatch) {
         try {
             const backendResult = JSON.parse(resultMatch[1])
             return { effectId, ...backendResult }
         } catch (e) {
-            console.warn('解析后端激光数据失败:', e)
+            console.warn('Failed to parse backend laser data:', e)
         }
     }
 
-    // 降级方案：使用简化数据
+    // Fallback: use simplified data
     const rangeMatch = machine.last_action.match(/range_([0-9.]+)/)
     const range = rangeMatch ? parseFloat(rangeMatch[1]) : 5.0
     const [x, y] = machine.position
@@ -80,7 +80,7 @@ export function parseLaserAction(machine) {
 }
 
 /**
- * 生成简单的网格路径
+ * Generate a simple grid path
  */
 function generateGridPath(x, y, dx, dy, range) {
     const grids = []

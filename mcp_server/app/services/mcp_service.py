@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-MCP Service - MCP 工具管理服务
+MCP Service — tool management service.
 
-基于 FastMCP 封装，提供工具注册和调用
-工具通过命名约定区分：human_* 和 machine_*
+Wraps FastMCP, provides tool registration and invocation.
+Tools are distinguished by naming convention: human_* and machine_*.
 """
 
 import json
@@ -27,7 +27,7 @@ from app.tool.human_tools import (
 
 
 class MCPService:
-    """MCP 工具管理服务"""
+    """MCP tool management service."""
 
     _instance: Optional["MCPService"] = None
 
@@ -43,13 +43,13 @@ class MCPService:
         self._server = FastMCP("openmanus")
         self._tools: Dict[str, BaseTool] = {}
 
-        # 注册工具
+        # Register tools
         self._register_default_tools()
         self.initialized = True
 
     def _register_default_tools(self):
-        """注册默认工具"""
-        # Human 工具
+        """Register default tools."""
+        # Human tools
         human_tools = [
             SendShortCommandTool(),
             SendLongCommandTool(),
@@ -57,7 +57,7 @@ class MCPService:
         for tool in human_tools:
             self.register_tool(tool)
 
-        # Machine 工具
+        # Machine tools
         machine_tools = [
             CheckEnvironmentTool(),
             StepMovementTool(),
@@ -68,7 +68,7 @@ class MCPService:
             self.register_tool(tool)
 
     def register_tool(self, tool: BaseTool) -> None:
-        """注册工具"""
+        """Register a tool."""
         self._tools[tool.name] = tool
 
         async def tool_method(t=tool, **kwargs):
@@ -89,7 +89,7 @@ class MCPService:
         self._server.tool()(tool_method)
 
     def _build_signature(self, tool_func: dict) -> Signature:
-        """构建函数签名"""
+        """Build function signature from tool schema."""
         props = tool_func.get("parameters", {}).get("properties", {})
         required = tool_func.get("parameters", {}).get("required", [])
 
@@ -109,7 +109,7 @@ class MCPService:
         return Signature(parameters=params)
 
     def list_tools(self) -> List[dict]:
-        """获取工具列表"""
+        """Get the list of available tools."""
         return [
             {
                 "name": tool.name,
@@ -120,7 +120,7 @@ class MCPService:
         ]
 
     async def call_tool(self, tool_name: str, parameters: dict) -> Any:
-        """调用工具"""
+        """Invoke a tool by name."""
         if tool_name not in self._tools:
             raise ValueError(f"Tool '{tool_name}' not found")
 
@@ -134,7 +134,7 @@ class MCPService:
         return str(result)
 
     def get_fastmcp_server(self) -> FastMCP:
-        """获取底层 FastMCP 服务器"""
+        """Get the underlying FastMCP server instance."""
         return self._server
 
 

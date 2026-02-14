@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MCP Server 配置"""
+"""MCP Server configuration."""
 
 import os
 

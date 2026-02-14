@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Agent 数据模型"""
+"""Agent Data Models"""
 
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 
 @dataclass
 class AgentInfo:
-    """Agent 基础信息"""
+    """Agent Base Information"""
     agent_id: str
-    agent_type: str  # "human" 或 "machine"
+    agent_type: str  # "human" or "machine"
     status: str = "active"
     metadata: Dict = field(default_factory=dict)
 
@@ -24,7 +24,7 @@ class AgentInfo:
 
 @dataclass
 class HumanInfo(AgentInfo):
-    """Human Agent 信息"""
+    """Human Agent Information"""
     machine_ids: List[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -38,9 +38,9 @@ class HumanInfo(AgentInfo):
 
 @dataclass
 class MachineInfo:
-    """Machine Agent 信息"""
+    """Machine Agent Information"""
     agent_id: str
-    owner_id: str  # 所属 Human ID
+    owner_id: str  # Owning Human ID
     position: List[float] = field(default_factory=lambda: [0, 0, 0])
     life_value: int = 10
     status: str = "active"

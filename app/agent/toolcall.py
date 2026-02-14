@@ -115,7 +115,7 @@ class ToolCallAgent(ReActAgent):
 
             # For 'auto' mode, continue with content if no commands but content exists
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
-                logger.info(f"🎯 {self.name} 在AUTO模式下没有选择工具，停止循环")
+                logger.info(f"🎯 {self.name} selected no tools in AUTO mode, stopping loop")
                 return False
                 # return bool(content)
 
@@ -177,14 +177,31 @@ class ToolCallAgent(ReActAgent):
             # Parse arguments
             args = json.loads(command.function.arguments or "{}")
 
-            # 自动注入 caller_id（仅对 Human Agent）
+            # Auto-inject caller_id (only for Human Agent)
             if hasattr(self, 'human_id') and self.human_id:
-                # 检查是否是 Human Agent（通过类名判断）
+                # Check if this is a Human Agent (by class name)
                 if self.__class__.__name__ == "HumanAgent":
                     if "caller_id" not in args:
                         args["caller_id"] = self.human_id
-                        logger.info(f"🎯 Human Agent 自动注入 caller_id: '{self.human_id}' for tool '{name}'")
+                        logger.info(f"🎯 Human Agent auto-injected caller_id: '{self.human_id}' for tool '{name}'")
 
+                    # Auto-correct machine_id: map shorthand to full ID
+                    if "machine_id" in args:
+                        mid = str(args["machine_id"]).strip()
+                        human_id = self.human_id
+                        machine_count = getattr(self, 'machine_count', 3)
+                        # If already a full ID format, do not modify
+                        if not mid.startswith(f"{human_id}_robot_"):
+                            import re
+                            # Extract numeric part: supports "1", "01", "robot-1", "robot_1", etc.
+                            num_match = re.search(r'(\d+)', mid)
+                            if num_match:
+                                num = int(num_match.group(1))
+                                # If the number is within valid range, map to full ID
+                                if 0 < num <= machine_count:
+                                    full_id = f"{human_id}_robot_{num:02d}"
+                                    logger.info(f"🔄 machine_id auto-corrected: '{mid}' -> '{full_id}'")
+                                    args["machine_id"] = full_id
             # Execute the tool
             logger.info(f"🔧 Activating tool: '{name}' with args: {args}")
             result = await self.available_tools.execute(name=name, tool_input=args)

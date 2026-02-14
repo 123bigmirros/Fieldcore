@@ -2,39 +2,29 @@ import { ref, computed } from 'vue'
 import { CoordinateTransform } from '../utils/coordinateTransform'
 
 /**
- * 视口控制和可见性判断
+ * Viewport control and visibility checks
  */
 export function useViewport() {
     const viewCenterOffset = ref({ x: 0, y: 0 })
     const viewRotation = ref(0)
     const laserVisionAreas = ref([])
 
-    // 坐标转换器
+    // Coordinate transformer
     const transformer = computed(() =>
         new CoordinateTransform(viewCenterOffset.value, viewRotation.value)
     )
 
     /**
-     * 检查位置是否在视野内
+     * Check if a position is visible.
+     * Server already applies fog-of-war filtering, so this always returns true.
+     * Function signature kept for debug code compatibility.
      */
-    function isPositionVisible(position, myMachines) {
-        // 检查机器人视野
-        const inNormalVision = myMachines.some(machine => {
-            const distance = CoordinateTransform.squareDistance(position, machine.position)
-            return distance <= machine.visibility_radius
-        })
-
-        // 检查激光视野
-        const inLaserVision = laserVisionAreas.value.some(area => {
-            const distance = CoordinateTransform.squareDistance(position, area.center)
-            return distance <= area.radius
-        })
-
-        return inNormalVision || inLaserVision
+    function isPositionVisible() {
+        return true
     }
 
     /**
-     * 更新视野中心
+     * Update view center
      */
     function updateViewCenter(offset, rotation) {
         viewCenterOffset.value = offset
@@ -42,7 +32,7 @@ export function useViewport() {
     }
 
     /**
-     * 重置视野
+     * Reset view
      */
     function resetView() {
         viewCenterOffset.value = { x: 0, y: 0 }
@@ -50,14 +40,14 @@ export function useViewport() {
     }
 
     /**
-     * 添加激光视野区域
+     * Add laser vision areas
      */
     function addLaserVision(areas) {
         laserVisionAreas.value.push(...areas)
     }
 
     /**
-     * 移除激光视野区域
+     * Remove laser vision areas
      */
     function removeLaserVision(predicate) {
         laserVisionAreas.value = laserVisionAreas.value.filter(predicate)
@@ -75,4 +65,3 @@ export function useViewport() {
         removeLaserVision
     }
 }
-
