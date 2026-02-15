@@ -73,7 +73,7 @@ def run_server():
     print("\nNote: Start World Server and MCP Server first.")
     print("Service started\n")
 
-    flask_app.run(host=config.HOST, port=config.PORT, debug=False)
+    flask_app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)
 
 
 def run_worker():

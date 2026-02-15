@@ -18,7 +18,7 @@ CORS(app)
 import requests
 
 # MCP服务器HTTP接口配置
-MCP_SERVER_URL = "http://localhost:8003"
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8003")
 
 def call_mcp_server(endpoint, data=None):
     """调用MCP服务器HTTP接口"""

@@ -206,6 +206,9 @@ node_modules
 .jukit/
 dump.rdb
 
+# Config with API keys
+config/config.toml
+
 # Personal / local-only
 todo_list.md
 CLAUDE.md

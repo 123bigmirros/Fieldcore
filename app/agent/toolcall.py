@@ -30,6 +30,7 @@ class ToolCallAgent(ReActAgent):
     tool_choices: TOOL_CHOICE_TYPE = ToolChoice.AUTO  # type: ignore
     special_tool_names: List[str] = Field(default_factory=lambda: [Terminate().name])
 
+    parallel_tool_calls: bool = False
     tool_calls: List[ToolCall] = Field(default_factory=list)
     _current_base64_image: Optional[str] = None
 
@@ -138,6 +139,10 @@ class ToolCallAgent(ReActAgent):
             # Return last message content if no tool calls
             return self.messages[-1].content or "No content or commands to execute"
 
+        # Use parallel execution when enabled and multiple tool calls exist
+        if self.parallel_tool_calls and len(self.tool_calls) > 1:
+            return await self._act_parallel()
+
         results = []
         for command in self.tool_calls:
             # Reset base64_image for each tool call
@@ -164,6 +169,44 @@ class ToolCallAgent(ReActAgent):
 
         return "\n\n".join(results)
 
+    async def _act_parallel(self) -> str:
+        """Execute all tool calls concurrently and collect results."""
+        logger.info(
+            f"⚡ {self.name} executing {len(self.tool_calls)} tool calls in parallel"
+        )
+
+        # Launch all tool executions concurrently
+        tasks = [self.execute_tool(command) for command in self.tool_calls]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect results and add tool messages in original order
+        results = []
+        for command, raw in zip(self.tool_calls, raw_results):
+            if isinstance(raw, Exception):
+                result = f"Error: {raw}"
+                logger.error(
+                    f"⚠️ Tool '{command.function.name}' failed in parallel execution: {raw}"
+                )
+            else:
+                result = raw
+
+            if self.max_observe:
+                result = result[: self.max_observe]
+
+            logger.info(
+                f"🎯 Tool '{command.function.name}' completed its mission! Result: {result}"
+            )
+
+            tool_msg = Message.tool_message(
+                content=result,
+                tool_call_id=command.id,
+                name=command.function.name,
+            )
+            self.memory.add_message(tool_msg)
+            results.append(result)
+
+        return "\n\n".join(results)
+
     async def execute_tool(self, command: ToolCall) -> str:
         """Execute a single tool call with robust error handling"""
         if not command or not command.function or not command.function.name:
@@ -181,9 +224,8 @@ class ToolCallAgent(ReActAgent):
             if hasattr(self, 'human_id') and self.human_id:
                 # Check if this is a Human Agent (by class name)
                 if self.__class__.__name__ == "HumanAgent":
-                    if "caller_id" not in args:
-                        args["caller_id"] = self.human_id
-                        logger.info(f"🎯 Human Agent auto-injected caller_id: '{self.human_id}' for tool '{name}'")
+                    args["caller_id"] = self.human_id
+                    logger.info(f"Human Agent set caller_id: '{self.human_id}' for tool '{name}'")
 
                     # Auto-correct machine_id: map shorthand to full ID
                     if "machine_id" in args:
@@ -202,6 +244,13 @@ class ToolCallAgent(ReActAgent):
                                     full_id = f"{human_id}_robot_{num:02d}"
                                     logger.info(f"🔄 machine_id auto-corrected: '{mid}' -> '{full_id}'")
                                     args["machine_id"] = full_id
+
+            # Auto-inject machine_id for Machine Agent
+            if hasattr(self, 'machine_id') and self.machine_id:
+                if self.__class__.__name__ == "MachineAgent":
+                    if "machine_id" in args:
+                        args["machine_id"] = self.machine_id
+
             # Execute the tool
             logger.info(f"🔧 Activating tool: '{name}' with args: {args}")
             result = await self.available_tools.execute(name=name, tool_input=args)

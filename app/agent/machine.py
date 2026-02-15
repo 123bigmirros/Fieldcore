@@ -2,9 +2,7 @@
 Machine Agent - 智能机器人，执行来自Human Agent的本地任务
 """
 
-import asyncio
-import json
-import time
+import os
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,14 +16,9 @@ from app.service.map_manager import map_manager
 from app.prompt.machine import (
     SYSTEM_PROMPT,
     NEXT_STEP_PROMPT,
-    COMMAND_LISTENER_PROMPT,
-    MOVE_COMMAND_PROMPT,
-    ACTION_COMMAND_PROMPT,
-    ENVIRONMENT_CHECK_PROMPT,
-    COMMAND_ERROR_PROMPT,
-    STATUS_UPDATE_PROMPT,
-    LISTENER_START_PROMPT
 )
+
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8003")
 
 
 class MachineAgent(MCPAgent):
@@ -107,7 +100,7 @@ class MachineAgent(MCPAgent):
         if not kwargs or kwargs.get("connection_type") == "http_api":
             kwargs = {
                 "connection_type": "http_api",
-                "server_url": "http://localhost:8003"
+                "server_url": MCP_SERVER_URL
             }
 
         # 初始化MCP连接
@@ -229,6 +222,16 @@ class MachineAgent(MCPAgent):
                 f"📊 执行历史：{len(self.command_history)} 个命令\n"
                 f"💡 请使用可用工具响应请求。"
             ))
+
+            # Inject machine context into the request
+            if request:
+                request = (
+                    f"{request}\n\n"
+                    f"[Context] 你的machine_id是: {self.machine_id}，"
+                    f"当前位置: {self.location}。"
+                    f"请直接使用 mcp_python_machine_step_movement 工具执行移动，"
+                    f"machine_id 参数使用 {self.machine_id}。"
+                )
 
             # 使用父类MCP agent执行
             result = await super().run(request)

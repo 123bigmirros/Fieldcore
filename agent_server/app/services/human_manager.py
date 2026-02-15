@@ -140,16 +140,17 @@ class HumanManager:
 
     def send_command(self, human_id: str, command: str) -> Tuple[bool, str]:
         """Send a command to a Human"""
+        # Get reference under lock, then release before running
         with self._data_lock:
             if human_id not in self._humans:
                 return False, f"Human {human_id} not found"
+            human = self._humans[human_id]
 
-            try:
-                human = self._humans[human_id]
-                result = asyncio.run(human.run(command))
-                return True, result
-            except Exception as e:
-                return False, str(e)
+        try:
+            result = asyncio.run(human.run(command))
+            return True, result
+        except Exception as e:
+            return False, str(e)
 
     def add_machine(self, human_id: str, machine_id: str):
         """Add a machine to the Human's management list"""

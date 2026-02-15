@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 """World Client — HTTP client for the World Server microservice."""
 
+import os
+
 import requests
 from typing import Dict, List, Optional, Tuple
+
+
+WORLD_SERVER_URL = os.getenv("WORLD_SERVER_URL", "http://localhost:8005")
 
 
 class WorldClient:
     """HTTP client for the World Server."""
 
-    def __init__(self, base_url: str = "http://localhost:8005"):
+    def __init__(self, base_url: str = WORLD_SERVER_URL):
         self.base_url = base_url
         self.timeout = 5
 

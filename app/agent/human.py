@@ -2,8 +2,9 @@
 Human Agent — intelligent commander that decomposes tasks and coordinates machines.
 """
 
-import json
+import os
 import uuid
+
 import requests
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,12 +16,10 @@ from app.service.map_manager import map_manager
 from app.prompt.human import (
     SYSTEM_PROMPT,
     NEXT_STEP_PROMPT,
-    COMMAND_ERROR_PROMPT,
-    MACHINE_DISCOVERY_PROMPT
 )
 
-# World 服务器地址（机器人注册等操作直接发到 World Server）
-WORLD_SERVER_URL = "http://localhost:8005"
+WORLD_SERVER_URL = os.getenv("WORLD_SERVER_URL", "http://localhost:8005")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8003")
 
 
 class HumanAgent(MCPAgent):
@@ -37,6 +36,9 @@ class HumanAgent(MCPAgent):
 
     # Agent类型
     agent_type: str = "human"
+
+    # Enable parallel tool execution for concurrent machine commands
+    parallel_tool_calls: bool = True
 
     # Human特有属性
     human_id: str = Field(default_factory=lambda: f"commander_{uuid.uuid4().hex[:8]}")
@@ -86,7 +88,7 @@ class HumanAgent(MCPAgent):
         if not kwargs or kwargs.get("connection_type") == "http_api":
             kwargs = {
                 "connection_type": "http_api",
-                "server_url": "http://localhost:8003",
+                "server_url": MCP_SERVER_URL,
             }
 
         # Initialize MCP connection
@@ -106,18 +108,18 @@ class HumanAgent(MCPAgent):
         for tool_name, tool_info in self.mcp_clients.tool_map.items():
             # Only show tools prefixed with human_
             if tool_name.startswith('human_') or tool_name.startswith('mcp_python_human_'):
-                # Compatible with both dict and HTTPMCPTool formats
                 if hasattr(tool_info, 'description'):
                     description = tool_info.description
                     tools_list.append(f"- {tool_name}: {description}")
         tools_text = "\n".join(tools_list)
-        # Replace the first system message (tool info) with enriched version
+        # Append tool details to the existing system prompt instead of replacing it
         if self.memory.messages and self.memory.messages[0].role == "system":
             from app.schema import Message
             tool_names = list(self.mcp_clients.tool_map.keys())
             tools_info = ", ".join(tool_names)
-            new_content = f"🔧 当前可用工具:\n{tools_text}\n\nAvailable MCP tools: {tools_info}"
-            self.memory.messages[0] = Message.system_message(new_content)
+            original_content = self.memory.messages[0].content
+            tool_section = f"\n\n🔧 当前可用工具:\n{tools_text}\n\nAvailable MCP tools: {tools_info}"
+            self.memory.messages[0] = Message.system_message(original_content + tool_section)
 
     async def create_machine_at_position(self, machine_id: str, position: list) -> bool:
         """Create a single machine at the specified position."""
@@ -169,6 +171,21 @@ class HumanAgent(MCPAgent):
         try:
             logger.info(f"Human Commander {self.human_id} received task: {request}")
             self.refresh_global_map()
+
+            # Inject machine context into the user request so the LLM knows
+            # which machine_ids to use when calling tools.
+            if request:
+                machine_ids = [
+                    f"{self.human_id}_robot_{i:02d}"
+                    for i in range(1, self.machine_count + 1)
+                ]
+                ids_str = ", ".join(machine_ids)
+                request = (
+                    f"{request}\n\n"
+                    f"[Context] 你的机器人ID列表: {ids_str}。"
+                    f"请直接使用 human_send_short_command 工具向这些机器人发送指令，"
+                    f"machine_id 使用上述完整ID。"
+                )
 
             # 使用父类的智能执行
             result = await super().run(request)

@@ -3,11 +3,15 @@
 Human 控制器 - 封装 Human 和 Machine 的创建和管理逻辑
 """
 
+import os
 from typing import Tuple
 
 from app.agent.human import HumanAgent
 from app.logger import logger
 from app.service.position_utils import find_random_valid_position
+
+
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8003")
 
 
 class HumanController:
@@ -17,7 +21,7 @@ class HumanController:
     async def create_human_with_machines(
         human_id: str,
         machine_count: int,
-        mcp_server_url: str = "http://localhost:8003"
+        mcp_server_url: str = MCP_SERVER_URL
     ) -> Tuple[HumanAgent, int]:
         """
         创建 Human Agent 并创建指定数量的机器人

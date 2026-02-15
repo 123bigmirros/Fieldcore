@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, isRef, unref } from 'vue'
 import axios from 'axios'
 import { CONFIG } from '../constants/config'
 
@@ -11,15 +11,30 @@ export function useCommand(humanId, apiKey) {
     const message = ref('')
     const messageType = ref('info') // 'info' | 'success' | 'error'
 
+    // Support both plain values and refs
+    const getHumanId = () => isRef(humanId) ? humanId.value : humanId
+    const getApiKey = () => isRef(apiKey) ? apiKey.value : apiKey
+
     const canSend = computed(() => {
-        return command.value.trim() && !isSending.value && humanId
+        return command.value.trim() && !isSending.value && getHumanId()
     })
 
     /**
      * Send command
      */
     async function sendCommand() {
-        if (!canSend.value || !humanId) return false
+        const hid = getHumanId()
+        const key = getApiKey()
+        console.log('[useCommand] sendCommand called', {
+            command: command.value,
+            canSend: canSend.value,
+            humanId: hid,
+            isSending: isSending.value
+        })
+        if (!canSend.value || !hid) {
+            console.warn('[useCommand] blocked: canSend=', canSend.value, 'humanId=', hid)
+            return false
+        }
 
         isSending.value = true
         message.value = ''
@@ -28,11 +43,11 @@ export function useCommand(humanId, apiKey) {
         try {
             // Use API Key auth (in Authorization header with Bearer prefix)
             const response = await axios.post(
-                `${CONFIG.API_BASE_URL}/api/v1/agents/${humanId}/commands`,
+                `${CONFIG.API_BASE_URL}/api/v1/agents/${hid}/commands`,
                 { command: command.value.trim() },
                 {
                     headers: {
-                        'Authorization': `Bearer ${apiKey}`
+                        'Authorization': `Bearer ${key}`
                     }
                 }
             )

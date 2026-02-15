@@ -126,6 +126,32 @@ def delete_agent(agent_id, user_id):
     return error_response(EC.AGENT_NOT_FOUND, error, 404)
 
 
+@agent_bp.route("/internal/<machine_id>/command", methods=["POST"])
+def internal_machine_command(machine_id):
+    """Internal endpoint for MCP Server to dispatch commands to Machine Agents.
+    No API key auth required — service-to-service only."""
+    from app.logger import logger
+
+    data = request.get_json() or {}
+    command = data.get("command", "")
+    offline = data.get("offline", False)
+
+    if not command:
+        return error_response(EC.VALIDATION_ERROR, "command is required")
+
+    if not agent_service.get_agent_info(machine_id):
+        return error_response(EC.AGENT_NOT_FOUND, f"Machine {machine_id} not found", 404)
+
+    if offline:
+        task_id = task_service.submit_command(machine_id, command)
+        return success_response({"job_id": task_id})
+    else:
+        success, result = agent_service.send_command(machine_id, command)
+        if success:
+            return success_response({"result": result})
+        return error_response(EC.INTERNAL_ERROR, result, 500)
+
+
 @agent_bp.route("", methods=["GET"])
 @require_api_key
 def list_agents(user_id):

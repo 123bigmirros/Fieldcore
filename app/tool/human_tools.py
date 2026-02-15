@@ -2,20 +2,36 @@
 Tools specific to Human agents for controlling and coordinating machines.
 """
 
-import json
-from typing import Any, Dict, List, Optional
+import os
 
-from app.service.world_service import world_service
+import requests as http_requests
+from typing import Optional
+
 from app.tool.base import BaseTool, ToolResult
+
+WORLD_SERVER_URL = os.getenv("WORLD_SERVER_URL", "http://localhost:8005")
+AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "http://localhost:8004")
 
 
 class BaseMachineControlTool(BaseTool):
-    """基础机器人控制工具类，提供共享的验证和执行逻辑"""
+    """Base class for machine control tools with shared validation and execution."""
 
-    def __init__(self, mcp_server: Optional[Any] = None):
-        super().__init__()
-        # MCP server reference for direct Machine Agent access
-        object.__setattr__(self, '_mcp_server', mcp_server)
+    def _get_machine_info_from_world(self, machine_id: str) -> Optional[dict]:
+        """Query World Server via HTTP to get machine info."""
+        try:
+            resp = http_requests.get(
+                f"{WORLD_SERVER_URL}/api/v1/world/machines",
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("data", {}).get("items", [])
+                for machine in items:
+                    if machine.get("machine_id") == machine_id:
+                        return machine
+            return None
+        except Exception:
+            return None
 
     async def _validate_and_execute(
         self,
@@ -31,8 +47,8 @@ class BaseMachineControlTool(BaseTool):
             mode = "async" if offline else "sync"
             logger.info(f"🔧 {self.name} called ({mode} mode) with caller_id: '{caller_id}' for machine: {machine_id}")
 
-            # Check if machine exists in world through world_service
-            machine_info = world_service.get_machine_info(machine_id)
+            # Check if machine exists in world through World Server HTTP API
+            machine_info = self._get_machine_info_from_world(machine_id)
             if not machine_info:
                 return ToolResult(
                     error=f"Machine {machine_id} not found in world registry"
@@ -60,35 +76,42 @@ class BaseMachineControlTool(BaseTool):
 
     def _enqueue_command(self, machine_id: str, command: str, offline: bool, caller_id: str = "") -> str:
         """
-        通过RQ消息队列控制机器人
+        Send command to Machine Agent via Agent Server internal HTTP API.
 
         Args:
-            machine_id: 机器人ID
-            command: 命令内容
-            offline: 是否离线执行（True=异步，False=同步等待）
-            caller_id: 调用者ID
+            machine_id: Machine ID
+            command: Command content
+            offline: Async execution (True=async, False=sync wait)
+            caller_id: Caller ID (human_id)
         """
         try:
             from app.logger import logger
-            logger.info(f"🚀 Enqueueing command (offline={offline}) for machine {machine_id}")
+            logger.info(f"Sending command (offline={offline}) for machine {machine_id} via Agent Server")
 
-            # 获取MCP服务器引用
-            mcp_server = getattr(self, '_mcp_server', None)
+            resp = http_requests.post(
+                f"{AGENT_SERVER_URL}/api/v1/agents/internal/{machine_id}/command",
+                json={
+                    "command": command,
+                    "offline": offline,
+                },
+                timeout=120 if not offline else 10,
+            )
 
-            if mcp_server:
+            if resp.status_code == 200:
+                data = resp.json()
+                result = data.get("data", {})
                 if offline:
-                    # 离线模式：仅确认命令已发送给机器人，不等待结果
-                    job_id = mcp_server.enqueue_command(machine_id, command, offline=True, human_id=caller_id)
-                    return f"✅ Long-term command queued for machine {machine_id}: '{command}' (job_id: {job_id}). The machine will execute this task in the background."
+                    job_id = result.get("job_id", "unknown")
+                    return f"Command queued for machine {machine_id}: '{command}' (job_id: {job_id}). The machine will execute this task in the background."
                 else:
-                    # 在线模式：等待机器人完整执行ReAct过程并返回结果
-                    result = mcp_server.enqueue_command(machine_id, command, offline=False, human_id=caller_id)
-                    return f"✅ Machine {machine_id} completed short-term command. Result: {result}"
+                    return f"Machine {machine_id} completed command. Result: {result.get('result', str(result))}"
             else:
-                return f"❌ MCP server not available for machine {machine_id}"
+                error_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                error_msg = error_data.get("error", {}).get("message", resp.text[:200])
+                return f"Command failed for {machine_id}: {error_msg}"
 
         except Exception as e:
-            return f"❌ Failed to queue command for {machine_id}: {str(e)}"
+            return f"Failed to send command for {machine_id}: {str(e)}"
 
 
 class SendShortCommandTool(BaseMachineControlTool):

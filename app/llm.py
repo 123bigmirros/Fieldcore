@@ -822,6 +822,20 @@ class LLM:
                 resp_params["instructions"] = "\n".join(system_texts)
             resp_params["input"] = input_items
 
+            # Debug: log what we're sending to the API
+            logger.info(f"[DEBUG] Responses API request: model={resp_params.get('model')}")
+            instr = resp_params.get('instructions', '')
+            logger.info(f"[DEBUG] instructions length: {len(instr)}")
+            logger.info(f"[DEBUG] instructions repr first 300: {repr(instr[:300])}")
+            # Log the part with machine IDs
+            if 'robot' in instr:
+                idx = instr.index('robot')
+                logger.info(f"[DEBUG] instructions around 'robot': {repr(instr[max(0,idx-100):idx+200])}")
+            logger.info(f"[DEBUG] tools count: {len(resp_params.get('tools', []))}")
+            if resp_params.get('tools'):
+                logger.info(f"[DEBUG] tool names: {[t.get('name') for t in resp_params['tools']]}")
+            logger.info(f"[DEBUG] input items count: {len(input_items)}")
+
             api_url = f"{self.base_url}/responses"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -839,6 +853,9 @@ class LLM:
                 )
 
             resp_data = raw_resp.json()
+
+            # Debug: log raw response
+            logger.info(f"[DEBUG] API response output: {json_module.dumps(resp_data.get('output', []), ensure_ascii=False)[:2000]}")
 
             # Convert Responses API output to ChatCompletionMessage
             content_text = None

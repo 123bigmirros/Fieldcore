@@ -55,7 +55,7 @@ def main():
     print("\nNote: Start World Server first.")
     print("Service started\n")
 
-    flask_app.run(host=config.HOST, port=config.PORT, debug=False)
+    flask_app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

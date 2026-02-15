@@ -202,17 +202,18 @@ class MachineManager:
                 return False, str(e)
 
     def send_command(self, machine_id: str, command: str) -> Tuple[bool, str]:
-        """向 Machine 发送命令"""
+        """Send command to Machine Agent"""
+        # Get machine reference under lock, then release before running
         with self._data_lock:
             if machine_id not in self._machines:
                 return False, f"Machine {machine_id} not found"
+            machine = self._machines[machine_id]
 
-            try:
-                machine = self._machines[machine_id]
-                result = asyncio.run(machine.run(command))
-                return True, result
-            except Exception as e:
-                return False, str(e)
+        try:
+            result = asyncio.run(machine.run(command))
+            return True, result
+        except Exception as e:
+            return False, str(e)
 
     def update_position(self, machine_id: str, position: List[float]) -> Tuple[bool, str]:
         """更新 Machine 位置"""

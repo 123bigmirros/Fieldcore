@@ -1,6 +1,6 @@
+import os
+
 import requests
-import json
-from typing import Dict, List, Optional, Any
 from app.logger import logger
 from app.tool.base import BaseTool, ToolResult
 from app.tool.tool_collection import ToolCollection
@@ -22,11 +22,13 @@ class HTTPMCPTool(BaseTool):
                 f"'{kwargs.get('caller_id', 'NOT_SET')}'"
             )
 
-            # tool_name goes in the URL path; body is just parameters
+            # Use longer timeout for human command tools (they dispatch to Machine Agents)
+            tool_timeout = 180 if "human_send" in self.tool_name else 30
+
             response = requests.post(
                 f"{self.server_url}/api/v1/mcp/tools/{self.tool_name}/invoke",
                 json={"parameters": kwargs},
-                timeout=30,
+                timeout=tool_timeout,
             )
 
             if response.status_code == 200:
@@ -51,7 +53,7 @@ class HTTPMCPClients(ToolCollection):
     description: str = "HTTP MCP client tools"
     sessions: dict = {}
 
-    def __init__(self, server_url: str = "http://localhost:8003"):
+    def __init__(self, server_url: str = os.getenv("MCP_SERVER_URL", "http://localhost:8003")):
         super().__init__()
         self.server_url = server_url
         self.name = "http_mcp"

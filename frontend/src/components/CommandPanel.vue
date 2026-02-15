@@ -8,7 +8,7 @@
         <label for="command-input">命令：</label>
         <input
           id="command-input"
-          v-model="commandState.command"
+          v-model="command"
           type="text"
           placeholder="请输入命令"
           class="command-input"
@@ -18,21 +18,21 @@
 
       <button
         @click="handleSend"
-        :disabled="!commandState.canSend"
+        :disabled="!canSend"
         class="send-button"
       >
-        {{ commandState.isSending ? '发送中...' : '发送命令' }}
+        {{ isSending ? '发送中...' : '发送命令' }}
       </button>
 
-      <div v-if="commandState.message" :class="['message', commandState.messageType]">
-        {{ commandState.message }}
+      <div v-if="message" :class="['message', messageType]">
+        {{ message }}
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { toRef } from 'vue'
 import { useCommand } from '../composables/useCommand'
 
 const props = defineProps({
@@ -46,10 +46,13 @@ const props = defineProps({
   }
 })
 
-const commandState = reactive(useCommand(props.humanId, props.apiKey))
+const { command, isSending, message, messageType, canSend, sendCommand } = useCommand(
+  toRef(props, 'humanId'),
+  toRef(props, 'apiKey')
+)
 
 async function handleSend() {
-  await commandState.sendCommand()
+  await sendCommand()
 }
 </script>
 
@@ -64,7 +67,7 @@ async function handleSend() {
   padding: 20px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   backdrop-filter: blur(10px);
-  z-index: 10;
+  z-index: 200;
   min-width: 300px;
   max-width: 380px;
 }

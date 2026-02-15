@@ -211,9 +211,9 @@ class AgentService:
         if human_manager.exists(agent_id):
             return human_manager.send_command(agent_id, command)
 
-        # # Machine command
-        # if machine_manager.exists(agent_id):
-        #     return machine_manager.send_command(agent_id, command)
+        # Machine command
+        if machine_manager.exists(agent_id):
+            return machine_manager.send_command(agent_id, command)
 
         return False, f"Agent {agent_id} not found"
 
