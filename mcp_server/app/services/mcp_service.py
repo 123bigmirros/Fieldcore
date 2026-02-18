@@ -19,10 +19,12 @@ from mcp.server.fastmcp import FastMCP
 from app.tool.base import BaseTool
 from app.tool.machine_tools import (
     CheckEnvironmentTool, StepMovementTool,
-    LaserAttackTool, GetSelfStatusTool
+    LaserAttackTool, GetSelfStatusTool,
+    GrabResourceTool, DropResourceTool
 )
 from app.tool.human_tools import (
-    SendShortCommandTool, SendLongCommandTool
+    ListMachinesTool, GetWorldViewTool,
+    SendShortCommandTool, SendLongCommandTool,
 )
 
 
@@ -51,6 +53,8 @@ class MCPService:
         """Register default tools."""
         # Human tools
         human_tools = [
+            ListMachinesTool(),
+            GetWorldViewTool(),
             SendShortCommandTool(),
             SendLongCommandTool(),
         ]
@@ -63,6 +67,8 @@ class MCPService:
             StepMovementTool(),
             LaserAttackTool(),
             GetSelfStatusTool(),
+            GrabResourceTool(),
+            DropResourceTool(),
         ]
         for tool in machine_tools:
             self.register_tool(tool)

@@ -135,7 +135,7 @@ class HumanAgent(MCPAgent):
                     "size": 1.0,
                     "facing_direction": [1.0, 0.0],
                     "owner": self.human_id,
-                    "view_size": 3
+                    "view_size": 7
                 },
                 timeout=5
             )

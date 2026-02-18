@@ -13,6 +13,73 @@ WORLD_SERVER_URL = os.getenv("WORLD_SERVER_URL", "http://localhost:8005")
 AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "http://localhost:8004")
 
 
+class ListMachinesTool(BaseTool):
+    """List all machines with their positions and status."""
+
+    name: str = "human_list_machines"
+    description: str = "List all machines with their positions, status, owner, and carried resources. Use this to understand the current state of all robots before planning."
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "caller_id": {
+                "type": "string",
+                "description": "ID of the human agent (automatically injected)",
+                "default": "",
+            },
+        },
+        "required": [],
+    }
+
+    async def execute(self, caller_id: str = "", **kwargs) -> ToolResult:
+        try:
+            resp = http_requests.get(
+                f"{WORLD_SERVER_URL}/api/v1/world/machines",
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                import json
+
+                data = resp.json().get("data", {})
+                return ToolResult(output=json.dumps(data, ensure_ascii=False))
+            return ToolResult(error=f"Failed to list machines: HTTP {resp.status_code}")
+        except Exception as e:
+            return ToolResult(error=f"Failed to list machines: {str(e)}")
+
+
+class GetWorldViewTool(BaseTool):
+    """Get the combined world view visible to a human agent's machines."""
+
+    name: str = "human_get_world_view"
+    description: str = "Get the world view visible to your machines (fog-of-war filtered). Returns all obstacles, machines, and resources within your machines' combined field of view. Use this to see the world layout before planning grab/move/drop tasks."
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "caller_id": {
+                "type": "string",
+                "description": "ID of the human agent (automatically injected)",
+                "default": "",
+            },
+        },
+        "required": [],
+    }
+
+    async def execute(self, caller_id: str = "", **kwargs) -> ToolResult:
+        try:
+            resp = http_requests.get(
+                f"{WORLD_SERVER_URL}/api/v1/world/view",
+                params={"human_id": caller_id},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                import json
+
+                data = resp.json().get("data", {})
+                return ToolResult(output=json.dumps(data, ensure_ascii=False))
+            return ToolResult(error=f"Failed to get world view: HTTP {resp.status_code}")
+        except Exception as e:
+            return ToolResult(error=f"Failed to get world view: {str(e)}")
+
+
 class BaseMachineControlTool(BaseTool):
     """Base class for machine control tools with shared validation and execution."""
 

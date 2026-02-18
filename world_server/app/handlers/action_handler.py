@@ -47,8 +47,28 @@ class ActionHandler:
         if distance == 0:
             return {'success': True, 'result': 'Direction updated'}
 
-        # Calculate new position
+        # Step-by-step path collision check
         current_pos = machine['position']
+        steps = int(round(distance))
+        for step in range(1, steps + 1):
+            check_x = round(current_pos[0] + norm_dir[0] * step)
+            check_y = round(current_pos[1] + norm_dir[1] * step)
+            check_pos = Position(check_x, check_y, 0)
+
+            # Check machine body collision at each step
+            if self._check_collision(check_pos, machine.get('size', 1.0), machine_id):
+                return {'success': False, 'error': f'Collision detected at ({check_x}, {check_y})'}
+
+            # Check carried resource collision at each step
+            for slot, resource in machine['slots'].items():
+                if resource is None:
+                    continue
+                sdx, sdy = SLOT_OFFSETS[slot]
+                slot_pos = Position(check_x + sdx, check_y + sdy, 0)
+                if self._check_collision(slot_pos, resource.get('size', 1.0), machine_id):
+                    return {'success': False, 'error': f'Carried resource collision at slot {slot}'}
+
+        # All steps clear, move to final position
         new_x = round(current_pos[0] + norm_dir[0] * distance)
         new_y = round(current_pos[1] + norm_dir[1] * distance)
         new_z = round(current_pos[2] if len(current_pos) > 2 else 0)
@@ -57,19 +77,6 @@ class ActionHandler:
         # Check bounds
         if not new_pos.is_within_bounds(self.world_bounds[0], self.world_bounds[1]):
             return {'success': False, 'error': 'Out of bounds'}
-
-        # Check machine body collision
-        if self._check_collision(new_pos, machine.get('size', 1.0), machine_id):
-            return {'success': False, 'error': 'Collision detected'}
-
-        # Check carried resource target position collision
-        for slot, resource in machine['slots'].items():
-            if resource is None:
-                continue
-            sdx, sdy = SLOT_OFFSETS[slot]
-            slot_target = Position(new_x + sdx, new_y + sdy, 0)
-            if self._check_collision(slot_target, resource.get('size', 1.0), machine_id):
-                return {'success': False, 'error': f'Carried resource collision at slot {slot}'}
 
         machine['position'] = new_pos.to_list()
         machine['last_action'] = f'moved_to_{new_pos}'
@@ -95,7 +102,7 @@ class ActionHandler:
 
         # Calculate adjacent cell
         target_pos = self._get_adjacent_pos(machine, direction)
-        tx, ty = int(target_pos.x), int(target_pos.y)
+        tx, ty = int(target_pos.coordinates[0]), int(target_pos.coordinates[1])
 
         # Find obstacle at this position
         found_id = None
@@ -139,7 +146,7 @@ class ActionHandler:
 
         # Check target position collision (excluding self)
         if self._check_collision(target_pos, resource.get('size', 1.0), machine_id):
-            return {'success': False, 'error': f'Cannot drop: collision at ({target_pos.x}, {target_pos.y})'}
+            return {'success': False, 'error': f'Cannot drop: collision at ({target_pos.coordinates[0]}, {target_pos.coordinates[1]})'}
 
         # Remove from slot and place back into world
         resource['position'] = target_pos.to_list()

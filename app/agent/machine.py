@@ -229,8 +229,8 @@ class MachineAgent(MCPAgent):
                     f"{request}\n\n"
                     f"[Context] 你的machine_id是: {self.machine_id}，"
                     f"当前位置: {self.location}。"
-                    f"请直接使用 mcp_python_machine_step_movement 工具执行移动，"
-                    f"machine_id 参数使用 {self.machine_id}。"
+                    f"所有工具的 machine_id 参数使用 {self.machine_id}。"
+                    f"请先检查周围环境，再根据任务需要选择合适的工具执行。"
                 )
 
             # 使用父类MCP agent执行

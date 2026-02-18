@@ -58,13 +58,14 @@ class WorldService:
         self._view_service = ViewService(self._machines, self._obstacles)
         self._serializer = FrontendSerializer()
 
-        # Load or initialize
+        # Load or initialize — update in-place to preserve references
+        # held by CollisionService, ViewService, etc.
         machines, obstacles, loaded = self._storage.load()
         if loaded:
-            self._machines = machines
-            self._obstacles = obstacles
+            self._machines.update(machines)
+            self._obstacles.update(obstacles)
         else:
-            self._obstacles = WorldStorage.create_default_obstacles()
+            self._obstacles.update(WorldStorage.create_default_obstacles())
 
         # Initialize command queue service
         command_queue_service.set_execute_callback(self._execute_action_internal)
@@ -203,7 +204,8 @@ class WorldService:
             for machine_id in list(self._machines.keys()):
                 command_queue_service.remove_queue(machine_id)
             self._machines.clear()
-            self._obstacles = WorldStorage.create_default_obstacles()
+            self._obstacles.clear()
+            self._obstacles.update(WorldStorage.create_default_obstacles())
             return {'machines_removed': count}
 
     def get_machine(self, machine_id: str) -> Optional[dict]:

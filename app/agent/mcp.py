@@ -84,6 +84,17 @@ class MCPAgent(ToolCallAgent):
         # Set available_tools to our MCP instance
         self.available_tools = self.mcp_clients
 
+        # Filter tools by agent_type prefix
+        if self.agent_type and hasattr(self.mcp_clients, 'tool_map'):
+            prefix = f"mcp_python_{self.agent_type}_"
+            raw_prefix = f"{self.agent_type}_"
+            filtered_map = {
+                name: tool for name, tool in self.mcp_clients.tool_map.items()
+                if name.startswith(prefix) or name.startswith(raw_prefix)
+            }
+            self.mcp_clients.tool_map = filtered_map
+            self.mcp_clients.tools = tuple(filtered_map.values())
+
         # Store initial tool schemas
         await self._refresh_tools()
 

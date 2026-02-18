@@ -51,6 +51,8 @@ class ViewService:
             if int(obs['position'][0]) == x and int(obs['position'][1]) == y:
                 cell['terrain'] = 'obstacle'
                 cell['obstacle_id'] = obs_id
+                cell['obstacle_type'] = obs.get('obstacle_type', 'static')
+                cell['size'] = obs.get('size', 1.0)
                 return cell
 
         # Check machines
